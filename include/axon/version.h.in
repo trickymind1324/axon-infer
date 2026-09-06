@@ -1,0 +1,20 @@
+#pragma once
+
+#include <string_view>
+
+#define AXON_VERSION_MAJOR @PROJECT_VERSION_MAJOR @
+#define AXON_VERSION_MINOR @PROJECT_VERSION_MINOR @
+#define AXON_VERSION_PATCH @PROJECT_VERSION_PATCH @
+#define AXON_VERSION_STRING "@PROJECT_VERSION@"
+#define AXON_GIT_COMMIT "@AXON_GIT_COMMIT@"
+
+namespace axon {
+
+constexpr std::string_view version() {
+  return AXON_VERSION_STRING;
+}
+constexpr std::string_view git_commit() {
+  return AXON_GIT_COMMIT;
+}
+
+}  // namespace axon

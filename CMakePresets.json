@@ -1,0 +1,92 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_EXPORT_COMPILE_COMMANDS": "ON" }
+    },
+    {
+      "name": "debug",
+      "inherits": "base",
+      "displayName": "Debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "displayName": "Release (runtime CPU dispatch)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "release-native",
+      "inherits": "release",
+      "displayName": "Release -march=native",
+      "cacheVariables": { "AXON_NATIVE": "ON" }
+    },
+    {
+      "name": "asan-ubsan",
+      "inherits": "base",
+      "displayName": "AddressSanitizer + UndefinedBehaviorSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "AXON_SANITIZE": "address,undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "ThreadSanitizer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "AXON_SANITIZE": "thread"
+      }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "displayName": "Coverage (clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AXON_COVERAGE": "ON",
+        "AXON_BUILD_BENCH": "OFF"
+      }
+    },
+    {
+      "name": "tidy",
+      "inherits": "base",
+      "displayName": "clang-tidy",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "AXON_CLANG_TIDY": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "release-native", "configurePreset": "release-native" },
+    { "name": "asan-ubsan", "configurePreset": "asan-ubsan" },
+    { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "coverage", "configurePreset": "coverage" },
+    { "name": "tidy", "configurePreset": "tidy" }
+  ],
+  "testPresets": [
+    {
+      "name": "base-test",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    { "name": "debug", "inherits": "base-test", "configurePreset": "debug" },
+    { "name": "release", "inherits": "base-test", "configurePreset": "release" },
+    { "name": "release-native", "inherits": "base-test", "configurePreset": "release-native" },
+    { "name": "asan-ubsan", "inherits": "base-test", "configurePreset": "asan-ubsan" },
+    { "name": "tsan", "inherits": "base-test", "configurePreset": "tsan" },
+    { "name": "coverage", "inherits": "base-test", "configurePreset": "coverage" },
+    { "name": "tidy", "inherits": "base-test", "configurePreset": "tidy" }
+  ]
+}

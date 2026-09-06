@@ -1,0 +1,26 @@
+# build
+build/
+build-*/
+cmake-build-*/
+CMakeUserPresets.json
+compile_commands.json
+
+# local docs and planning (not committed by policy)
+docs/
+PRD-inference-engine.md
+
+# models and data
+models/
+*.gguf
+*.safetensors
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# editors / os
+.vscode/
+.idea/
+.cache/
+.DS_Store
