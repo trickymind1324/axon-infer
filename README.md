@@ -56,6 +56,8 @@ scripts/format.sh          # clang-format all sources
 cmake --preset tidy && cmake --build --preset tidy
 ```
 
+`scripts/check_all.sh` runs every gate in one go: format check, build and tests for the debug, release, ASan+UBSan and TSan presets, clang-tidy, and a benchmark smoke run. It is the required check before a change is merged.
+
 Presets: `debug`, `release`, `release-native` (adds `-march=native`), `asan-ubsan`, `tsan`, `coverage`, `tidy`. Default release builds use runtime CPU dispatch so one binary runs on any x86-64 or arm64 machine.
 
 Dependencies are fetched by CMake at configure time: fmt, CLI11, Catch2 (tests), Google Benchmark (bench). Nothing else.
