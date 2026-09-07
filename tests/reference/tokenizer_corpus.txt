@@ -1,0 +1,172 @@
+The quick brown fox jumps over the lazy dog.
+I can't believe it's not butter! We're going to need a bigger boat, aren't we?
+I CAN'T. YOU'RE. THEY'VE. WE'LL. HE'D. IT'S. I'M.
+don't Don't DON'T doN'T d'oh 'tis 'twas rock'n'roll
+Hello, world! Hello,world. Hello , world ; hello: world
+She said "yes" and he replied 'no' -- then they left...
+a
+A
+ab
+The
+ leading space
+trailing space 
+  two leading
+two trailing  
+multiple   internal    spaces here
+tabs	here	and		two
+mixed 	 spaces	 and tabs 
+        
+		
+
+word.word,word;word:word!word?word
+snake_case camelCase PascalCase kebab-case SCREAMING_SNAKE
+e-mail: someone@example.com, url: https://example.com/path?q=1&r=2#frag
+C:\Users\name\file.txt and /usr/local/bin/tool
+~!@#$%^&*()_+-=[]{}|;':",./<>?`
+((nested (parens))) [[brackets]] {{braces}}
+a+b=c a-b=c a*b=c a/b=c a%b=c a**2 a^2 a&&b a||b a==b a!=b a<=b a>=b
+100% of $1,234.56 is 1,234.56 USD (approx. €1.100,50)
+0 1 12 123 1234 12345 123456 1234567 12345678 123456789 1234567890
+3.14159 2.71828 1e10 6.022e23 -273.15 +42 0x1F 0b1010 0o777 1_000_000
+Call 555-0199 or 555 0199 or (555) 019-9 at 09:30 on 2024-01-15T10:20:30Z
+v1.2.3 v10.20.30 version2 2nd 3rd 4th 21st 100th 1000000th
+1234567890123456789012345678901234567890
+١٢٣ ٤٥٦ ৩৪৫ १२३ ½ ¾ Ⅷ ⑤ 𝟘𝟙𝟚
+a1b2c3 x99y ab12cd34 no1 1no 1a2b 123abc abc123 ABC123def456
+ a
+a 
+ a 
+  a  
+a  b
+a   b
+a	b
+a 	 b
+ 	 a
+end with newline-like text but no newline
+ nbsp inside 
+　ideographic space　here
+ em space 
+zero​width​space
+soft­hyphen
+combining é and ñ
+#include <vector>
+int main(int argc, char** argv) { return argc > 1 ? 0 : 1; }
+for (size_t i = 0; i < n; ++i) { sum += a[i] * b[i]; }
+template <class T> requires std::integral<T> constexpr T twice(T v) { return v * 2; }
+auto lambda = [&](std::size_t begin, std::size_t end, int tid) { work(begin, end); };
+std::vector<std::pair<std::string, std::int32_t>> entries_;
+def fib(n): return n if n < 2 else fib(n - 1) + fib(n - 2)
+print(f"{name!r:>10} costs ${price:,.2f}")
+import numpy as np; x = np.arange(10)[::-1] ** 2
+    if x is None:
+        return []
+{"key": "value", "n": 123, "list": [1, 2.5, null, true], "nested": {"a": {}}}
+SELECT id, COUNT(*) FROM users WHERE created_at >= '2024-01-01' GROUP BY id HAVING COUNT(*) > 1;
+git commit -m "Add the mmap-backed arena allocator" && git push -u origin main
+<div class="container"><p id='x'>Hello &amp; goodbye</p></div>
+echo $HOME | tr 'a-z' 'A-Z' > /dev/null 2>&1; exit $?
+/* block comment */ // line comment
+# hash comment
+0x7FFFFFFF, 0xFFFFFFFFFFFFFFFFULL, 1.0f, 2.0L, 'c', '\n', "\t"
+x = y if z else w   # inline comment with   spaces
+😀 😃 😄 😁 😆 😅 🤣 😂
+👍🏽 👋🏻 🧑🏿‍💻 👨‍👩‍👧‍👦 🏳️‍🌈 🇮🇳 🇺🇸
+I ❤️ C++ and 🚀 rockets, ☕ coffee, ⭐️ stars!
+emoji😀inside😀words and😀 after space
+→ ← ↑ ↓ ⇒ ∀x∈ℝ: x² ≥ 0 ∑ ∏ √ ∞ ≠ ≈ ≤ ≥ ± × ÷
+© ® ™ § ¶ • … – — ‘ ’ “ ” « » ¿ ¡
+♠ ♣ ♥ ♦ ♪ ♫ ☀ ☁ ☂ ☃
+中文文本处理是自然语言处理的重要组成部分。
+日本語のテキストをトークン化します。東京都渋谷区。
+한국어 텍스트를 토큰화합니다. 서울특별시 강남구.
+這是繁體中文的句子，包含標點符號。
+العربية لغة جميلة وغنية بالمفردات.
+עברית היא שפה שמית.
+हिन्दी भारत की राजभाषा है। नमस्ते दुनिया!
+বাংলা ভাষা মিষ্টি ভাষা।
+தமிழ் மொழி மிகவும் பழமையானது.
+Русский язык — один из восточнославянских языков.
+Ελληνικά είναι μια ινδοευρωπαϊκή γλώσσα.
+ภาษาไทยไม่มีการเว้นวรรคระหว่างคำ
+Tiếng Việt có nhiều dấu thanh: à á ả ã ạ.
+Türkçe: İstanbul'da güneşli bir gün. ığüşöç
+Deutsch: Straße, Größe, Übergrößen, Fußgängerübergang.
+Français: l'été, aujourd'hui, c'est-à-dire, où êtes-vous?
+Español: ¿Qué tal? ¡Muy bien! niño, mañana, año
+Mixed: Hello 世界 مرحبا Привет नमस्ते 안녕 🌍!
+中文English混合text with 123数字456
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab 
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+================================================== title ==================================================
+................................................................
+😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀
+中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中中
+ x  y   z    
+supercalifragilisticexpialidocious pneumonoultramicroscopicsilicovolcanoconiosis
+it To All Her 11265 an On An CAN by her can to
+for. ALL are 76231 can At Would to were an they they on will a one his this IN 44833
+Have  More  we  or  from  her  in  he  More  who  if  when  this  more  they  THERE  37674  for
+Were 	 had 	 he 	 an 	 he 	 from 	 which 	 It 	 30583 	 the 	 36953 	 THE 	 all 	 can 	 for
+if to when but BUT been With be that TO 13299 at in there been! has THAT were they Are is so:
+69239  AT  all  no  if  will  one  as  by  their  by  no  on  so  with  from  of  you:  has
+At 25782 81797 there you from a that would you an His who but
+as 	 60994 	 IF 	 has 	 more 	 it 	 For 	 who
+an with Be be. no not For
+more 	 one 	 THEIR 	 it 	 of 	 was 	 62061 	 there 	 We 	 when 	 we 	 is 	 36296 	 and 	 their 	 of 	 in
+has will; all their will not with for but in An more that it if it. 12337 but as
+would 	 their 	 41749 	 a 	 of 	 they 	 of 	 one
+that  by  Is  He  was.
+not 	 all 	 can 	 Or 	 to 	 was 	 in, 	 Been 	 Not 	 By 	 that 	 his 	 have 	 he 	 and 	 on 	 as. 	 with 	 been 	 58417 	 their 	 he 	 of 	 And
+with on is if were but are by would for from For been not To which more 38411 and as,
+his we and 23980 the a their on The A Her of: By one
+would has or WERE who It would been will for no of her would will A for is had Been all were? in their
+One  so  in  on  85187  they  Which  when,  there  With  it  if  are  For  to  When  be  this  this  they  11253  You  They  their
+27618  in  it  not  for  been  that  by  were  As  were
+WHO from that the his that with so! in Her an to,
+34829 an with an no we Who who there if Were WE you this: so not on we 21188 65152 43625 no for
+was  a  at;  with  so
+so which, were! for one Be on if are OF an you Were but one 14292
+it WHEN who no a And 4927
+been: an That are 34194 by The
+he if on on of would To were if 55616 4469 will have 38287 so 26268 are
+99676 THIS there was were More HAS But of it
+but would WHO a 85520 one and who
+376  a!  have  that  46744  are  An  would  at  47742  so  of  on
+Which in to: in
+he There so or Are no been In BY would which an for Was
+it or they Has with 8484 If we as is not Be were 17423 have 70590 more this; he so? 30867 it; with but. their
+they  Is  by  At  6604  with  9845  at  was  not  more  is  would  Be  HIS  be  and  if  the  have  was  64962  we
+but it a but have more
+so  from  of  at  but  be  an  AN  a  at  AS  to
+can  at  AS  22516  IN
+ARE  and  you  has  Which  would  as  by  there
+52395 	 47082 	 THAT 	 who 	 With 	 we 	 When 	 OR
+we are are an at 459 there 81077 they you IN an had More BEEN who who
+which  For  in  who  64470  this  as  who  in  there  as  there?  it?  be  there  or  21132  been  when
+NOT One at had her is; been so
+at 	 at 	 a 	 was 	 to; 	 not 	 her 	 or 	 So 	 it: 	 an 	 at 	 for 	 there 	 Of
+ARE  from  have  HER  at  1849  on  Had  BEEN  more  but  The  we  has
+one 52 And of 13751 the more it one their have was in to who would which so a 13799 5087 that
+to; when one this Be Their not 20864 so with his which been more all one of 40337 be Her AS OF there from Will
+will  and  So  her  with  all  in
+14676 And no no this For
+or 	 Not 	 not 	 to 	 at 	 has 	 this 	 of 	 of 	 is 	 Would 	 11913
+as 	 99900 	 no 	 the 	 is 	 was 	 her 	 their. 	 this 	 21730 	 that 	 a
+been  is  but  So  If  be
+82672 by for no has from 59022 more 57514 will 43785 they 25109 he would 20445 on has 24808 not
+MORE  19440  are  an,  been  50900  They  but
+by been, it: But on an her have more if by IF an been 52446 would as? you there one was or which Is 93875
+FROM  can  be  Their  at  have  89700  was  no  who  from  not?  To  have  been  from  97186  but  one
+9030 84174 we it been have this IF you by? when? 353 who 39560 or an a
+are To can for from the be
+HAS  it  was  from  be  90180  has  a  we  90805  be
+that  not  for  We  they  will  78590  So  or  can  this  at  When  been  If  There  so  his  is  were  It  would  for  more
+we 	 be! 	 an, 	 this? 	 but 	 he 	 from 	 if 	 that 	 or 	 for 	 Been 	 and 	 we 	 all 	 but 	 The 	 you 	 More
+there it will When and they WAS was have If for we 4488 Or can to One that have but
+<|im_start|>user
+<|endoftext|>
+<s> </s> <unk> <pad>
+<|begin_of_text|><|start_header_id|>
+text with <|im_end|> inside
+<0x0A> <0xFF> byte-token-like
