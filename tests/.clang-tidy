@@ -1,0 +1,3 @@
+# Tests guard optionals with Catch2 REQUIRE, which clang-tidy cannot see through.
+InheritParentConfig: true
+Checks: '-bugprone-unchecked-optional-access'
