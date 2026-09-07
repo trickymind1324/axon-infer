@@ -40,25 +40,25 @@ Decoded decode(std::string_view text, std::size_t pos) noexcept {
   const auto lead = static_cast<unsigned char>(text[pos]);
   const std::size_t len = sequence_length(lead);
   if (len == 0 || pos + len > text.size()) {
-    return {kReplacement, 1, false};
+    return {.code_point = kReplacement, .length = 1, .valid = false};
   }
   if (len == 1) {
-    return {lead, 1, true};
+    return {.code_point = lead, .length = 1, .valid = true};
   }
   std::uint32_t cp = lead & (0x7FU >> len);
   for (std::size_t i = 1; i < len; ++i) {
     const auto c = static_cast<unsigned char>(text[pos + i]);
     if ((c & 0xC0) != 0x80) {
-      return {kReplacement, 1, false};
+      return {.code_point = kReplacement, .length = 1, .valid = false};
     }
     cp = (cp << 6) | (c & 0x3FU);
   }
   // Reject overlong encodings, surrogates and out-of-range values.
   const bool overlong = (len == 3 && cp < 0x800) || (len == 4 && cp < 0x10000);
   if (overlong || (cp >= 0xD800 && cp <= 0xDFFF) || cp > 0x10FFFF) {
-    return {kReplacement, 1, false};
+    return {.code_point = kReplacement, .length = 1, .valid = false};
   }
-  return {cp, len, true};
+  return {.code_point = cp, .length = len, .valid = true};
 }
 
 void append(std::string& out, std::uint32_t cp) {

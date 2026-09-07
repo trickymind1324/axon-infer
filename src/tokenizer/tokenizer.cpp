@@ -28,7 +28,7 @@ Expected<std::unique_ptr<Tokenizer>> Tokenizer::from_gguf(const GGUFFile& file) 
   }
   return make_error(
       ErrorCode::Unsupported,
-      fmt::format("tokenizer.ggml.model: expected \"gpt2\" or \"llama\", found \"{}\"", model));
+      fmt::format(R"(tokenizer.ggml.model: expected "gpt2" or "llama", found "{}")", model));
 }
 
 std::vector<std::int32_t> Tokenizer::encode(std::string_view text, EncodeOptions options) const {

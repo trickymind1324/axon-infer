@@ -53,7 +53,7 @@ void SpmTokenizer::encode_fragment(std::string_view text, bool at_start,
   for (std::size_t pos = 0; pos < escaped.size();) {
     const unicode::Decoded d = unicode::decode(escaped, pos);
     const int index = static_cast<int>(symbols.size());
-    symbols.push_back({pos, pos + d.length, index - 1, index + 1});
+    symbols.push_back({.begin = pos, .end = pos + d.length, .prev = index - 1, .next = index + 1});
     pos += d.length;
   }
   symbols.back().next = -1;

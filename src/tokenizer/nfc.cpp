@@ -89,8 +89,7 @@ void decompose_into(std::uint32_t cp, std::vector<std::uint32_t>& out) {
 bool is_nfc_fast_path(std::string_view text) noexcept {
   // Bytes below 0xCC can only encode code points below U+0300: no decompositions, no
   // combining marks, nothing that composes with anything.
-  return std::all_of(text.begin(), text.end(),
-                     [](char c) { return static_cast<unsigned char>(c) < 0xCC; });
+  return std::ranges::all_of(text, [](char c) { return static_cast<unsigned char>(c) < 0xCC; });
 }
 
 std::string normalize_nfc(std::string_view text) {

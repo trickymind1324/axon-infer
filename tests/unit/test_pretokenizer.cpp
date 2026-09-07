@@ -14,6 +14,7 @@ std::vector<std::string> split(axon::PreType type, std::string_view text) {
   std::vector<axon::ByteRange> ranges;
   axon::pretokenize(type, text, ranges);
   std::vector<std::string> out;
+  out.reserve(ranges.size());
   for (const auto& [b, e] : ranges) {
     out.emplace_back(text.substr(b, e - b));
   }

@@ -28,12 +28,13 @@ Expected<std::unique_ptr<Vocab>> Vocab::from_gguf(const GGUFFile& file) {
   vocab->chat_template = std::string(file.get_string_or("tokenizer.chat_template", ""));
 
   const MetadataValue* tokens = file.metadata("tokenizer.ggml.tokens");
-  if (tokens == nullptr || !tokens->as_string_array()) {
+  const auto token_array = tokens == nullptr ? std::nullopt : tokens->as_string_array();
+  if (!token_array) {
     return vocab_error(
         "metadata 'tokenizer.ggml.tokens': expected a string array, found " +
         std::string(tokens == nullptr ? "missing" : gguf_value_type_name(tokens->type())));
   }
-  const auto pieces = *tokens->as_string_array();
+  const auto pieces = *token_array;
   if (pieces.empty()) {
     return vocab_error("tokenizer.ggml.tokens: expected at least one token, found none");
   }
@@ -64,10 +65,11 @@ Expected<std::unique_ptr<Vocab>> Vocab::from_gguf(const GGUFFile& file) {
 
   std::span<const std::string_view> merges;
   if (const MetadataValue* m = file.metadata("tokenizer.ggml.merges"); m != nullptr) {
-    if (!m->as_string_array()) {
+    const auto merge_array = m->as_string_array();
+    if (!merge_array) {
       return vocab_error("tokenizer.ggml.merges: expected a string array");
     }
-    merges = *m->as_string_array();
+    merges = *merge_array;
   }
 
   // Copy every piece and merge into one buffer, then build views into it.
@@ -139,18 +141,13 @@ Expected<std::unique_ptr<Vocab>> Vocab::from_gguf(const GGUFFile& file) {
   }
 
   const bool is_spm = vocab->model == "llama";
-  if (const MetadataValue* v = file.metadata("tokenizer.ggml.add_bos_token");
-      v != nullptr && v->as_bool()) {
-    vocab->add_bos = *v->as_bool();
-  } else {
-    vocab->add_bos = is_spm;  // llama.cpp default: SentencePiece models add BOS, BPE models do not
-  }
-  if (const MetadataValue* v = file.metadata("tokenizer.ggml.add_space_prefix");
-      v != nullptr && v->as_bool()) {
-    vocab->add_space_prefix = *v->as_bool();
-  } else {
-    vocab->add_space_prefix = is_spm;
-  }
+  auto read_flag = [&](const char* key, bool fallback) {
+    const MetadataValue* v = file.metadata(key);
+    return v == nullptr ? fallback : v->as_bool().value_or(fallback);
+  };
+  // llama.cpp defaults: SentencePiece models add BOS and a space prefix, BPE models do not.
+  vocab->add_bos = read_flag("tokenizer.ggml.add_bos_token", is_spm);
+  vocab->add_space_prefix = read_flag("tokenizer.ggml.add_space_prefix", is_spm);
 
   // Tokens matched literally in text (control, user-defined and the unknown token), longest
   // piece first so matching prefers the longest.

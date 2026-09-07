@@ -62,11 +62,11 @@ public:
     chars_.reserve(text.size() + 1);
     for (std::size_t pos = 0; pos < text.size();) {
       const unicode::Decoded d = unicode::decode(text, pos);
-      chars_.push_back({d.code_point, pos});
+      chars_.push_back({.cp = d.code_point, .offset = pos});
       classes_.push_back(classify(d.code_point));
       pos += d.length;
     }
-    chars_.push_back({0, text.size()});  // sentinel: offset of the end
+    chars_.push_back({.cp = 0, .offset = text.size()});  // sentinel: offset of the end
     n_ = classes_.size();
   }
 

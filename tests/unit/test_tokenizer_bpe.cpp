@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 TEST_CASE("SmolLM2 tokenizer loads from the tokenizer-only fixture", "[tokenizer][bpe]") {
   const auto tok =
       axon::test::open_tokenizer(axon::test::fixture_path("tokenizer/smollm2.tokenizer.gguf"));
@@ -49,7 +51,7 @@ TEST_CASE("special tokens are parsed only on request", "[tokenizer][bpe]") {
   CHECK(parsed.front() == 1);
   CHECK(parsed.back() == 2);
   CHECK(parsed.size() < literal.size());
-  CHECK(std::find(literal.begin(), literal.end(), 1) == literal.end());
+  CHECK(std::ranges::find(literal, 1) == literal.end());
   CHECK(tok->decode(parsed, false) == text);
   CHECK(tok->decode(parsed, true) == "user\nhi");
 }

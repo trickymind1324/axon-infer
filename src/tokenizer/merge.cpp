@@ -49,7 +49,7 @@ void merge_loop(std::string_view text, std::vector<MergeSymbol>& symbols, Priori
     const MergeSymbol& r = symbols[static_cast<std::size_t>(l.next)];
     float p = 0.0F;
     if (priority(piece(l), piece(r), p)) {
-      queue.push({p, left, l.end, r.end});
+      queue.push({.priority = p, .left = left, .left_end = l.end, .right_end = r.end});
     }
   };
   for (int i = 0; i + 1 < static_cast<int>(symbols.size()); ++i) {

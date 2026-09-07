@@ -74,7 +74,10 @@ void BpeTokenizer::encode_chunk(std::string_view chunk, std::vector<std::int32_t
   for (const char c : chunk) {
     const std::string& piece = byte_pieces_[static_cast<unsigned char>(c)];
     const int index = static_cast<int>(symbols.size());
-    symbols.push_back({mapped.size(), mapped.size() + piece.size(), index - 1, index + 1});
+    symbols.push_back({.begin = mapped.size(),
+                       .end = mapped.size() + piece.size(),
+                       .prev = index - 1,
+                       .next = index + 1});
     mapped += piece;
   }
   if (symbols.empty()) {
