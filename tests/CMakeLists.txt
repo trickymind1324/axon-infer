@@ -13,10 +13,6 @@ if(AXON_FUZZ)
   add_subdirectory(fuzz)
 endif()
 
-if(AXON_FUZZ)
-  add_subdirectory(fuzz)
-endif()
-
 # Opt-in tests against downloaded models (skipped unless AXON_MODELS_DIR is set).
 file(GLOB AXON_INTEGRATION_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/integration/*.cpp)
 add_executable(axon_integration_tests ${AXON_INTEGRATION_TEST_SOURCES})
