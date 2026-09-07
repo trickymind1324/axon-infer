@@ -46,6 +46,17 @@
       }
     },
     {
+      "name": "fuzz",
+      "inherits": "base",
+      "displayName": "libFuzzer + ASan + UBSan (Linux clang)",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "AXON_SANITIZE": "address,undefined",
+        "AXON_FUZZ": "ON",
+        "AXON_BUILD_BENCH": "OFF"
+      }
+    },
+    {
       "name": "coverage",
       "inherits": "base",
       "displayName": "Coverage (clang)",
@@ -71,6 +82,7 @@
     { "name": "release-native", "configurePreset": "release-native" },
     { "name": "asan-ubsan", "configurePreset": "asan-ubsan" },
     { "name": "tsan", "configurePreset": "tsan" },
+    { "name": "fuzz", "configurePreset": "fuzz" },
     { "name": "coverage", "configurePreset": "coverage" },
     { "name": "tidy", "configurePreset": "tidy" }
   ],
@@ -86,6 +98,7 @@
     { "name": "release-native", "inherits": "base-test", "configurePreset": "release-native" },
     { "name": "asan-ubsan", "inherits": "base-test", "configurePreset": "asan-ubsan" },
     { "name": "tsan", "inherits": "base-test", "configurePreset": "tsan" },
+    { "name": "fuzz", "inherits": "base-test", "configurePreset": "fuzz" },
     { "name": "coverage", "inherits": "base-test", "configurePreset": "coverage" },
     { "name": "tidy", "inherits": "base-test", "configurePreset": "tidy" }
   ]

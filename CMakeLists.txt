@@ -21,6 +21,7 @@ option(AXON_BUILD_BENCH "Build benchmarks" ON)
 option(AXON_NATIVE "Compile with -march=native (local peak numbers only)" OFF)
 option(AXON_COVERAGE "Enable source-based coverage (clang only)" OFF)
 option(AXON_CLANG_TIDY "Run clang-tidy on project targets" OFF)
+option(AXON_FUZZ "Build libFuzzer targets (clang with compiler-rt fuzzer only)" OFF)
 set(AXON_SANITIZE "" CACHE STRING "Comma-separated sanitizers: address,undefined,thread")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
