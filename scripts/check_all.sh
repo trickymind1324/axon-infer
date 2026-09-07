@@ -34,6 +34,11 @@ if [ "${SKIP_TIDY:-0}" != "1" ]; then
   cmake --build --preset tidy
 fi
 
+if [ -d "${AXON_MODELS_DIR:-models}" ] && ls "${AXON_MODELS_DIR:-models}"/*.gguf >/dev/null 2>&1; then
+  step "integration tests (models found)"
+  AXON_MODELS_DIR="${AXON_MODELS_DIR:-models}" ctest --preset release -L integration
+fi
+
 step "benchmark smoke"
 ./build/release/bench/bench_kernels --benchmark_min_time=0.01s
 
