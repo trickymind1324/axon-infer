@@ -28,7 +28,7 @@ TEST_CASE("axt fixture reader", "[kernels][fixture]") {
   CHECK(half.dim(0) == 48);
   CHECK(half.dim(1) == 64);
   CHECK(half.type == axon::test::AxtType::F16);
-  CHECK(half.as_u16().size() == 48 * 64);
+  CHECK(half.as_u16().size() == std::size_t{48} * 64);
   const auto values = half.as_f32();
   for (const float v : values) {
     CHECK(std::abs(v) <= 0.125F);

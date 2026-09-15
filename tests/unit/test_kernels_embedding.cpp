@@ -15,9 +15,9 @@ TEST_CASE("embedding_row gathers F32, F16 and BF16 rows", "[kernels][embedding]"
     const char* name;
     axon::DType type;
   };
-  for (const auto& c :
-       {Case{"embedding_f32", axon::DType::F32}, Case{"embedding_f16", axon::DType::F16},
-        Case{"embedding_bf16", axon::DType::BF16}}) {
+  for (const auto& c : {Case{.name = "embedding_f32", .type = axon::DType::F32},
+                        Case{.name = "embedding_f16", .type = axon::DType::F16},
+                        Case{.name = "embedding_bf16", .type = axon::DType::BF16}}) {
     const std::string base = c.name;
     const auto table = axon::test::load_axt(base + ".table");
     const auto index = axon::test::load_axt(base + ".index").as_i32();

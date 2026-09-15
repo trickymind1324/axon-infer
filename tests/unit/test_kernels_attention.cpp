@@ -23,9 +23,9 @@ struct Shape {
 };
 
 constexpr Shape kShapes[] = {
-    {"attention_s8_h4_kv2_d16", 8, 4, 2, 16},
-    {"attention_s1_h2_kv1_d8", 1, 2, 1, 8},
-    {"attention_s5_h2_kv1_d8", 5, 2, 1, 8},
+    {.name = "attention_s8_h4_kv2_d16", .seq = 8, .n_head = 4, .n_head_kv = 2, .head_dim = 16},
+    {.name = "attention_s1_h2_kv1_d8", .seq = 1, .n_head = 2, .n_head_kv = 1, .head_dim = 8},
+    {.name = "attention_s5_h2_kv1_d8", .seq = 5, .n_head = 2, .n_head_kv = 1, .head_dim = 8},
 };
 
 float inv_sqrt(std::size_t n) {
