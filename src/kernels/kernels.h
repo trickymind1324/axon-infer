@@ -1,0 +1,71 @@
+#pragma once
+
+// Numerical kernels for the LLaMA forward pass, reached through a table of function pointers so
+// SIMD variants can replace entries later without touching any call site.
+//
+// Conventions: everything is row-major and contiguous. A weight W for y = W x is stored as
+// [n_out][n_in], which is exactly the GGUF layout (shape {n_in, n_out}, innermost first), so no
+// transposition ever happens. Reductions run sequentially in float; the scalar table is the
+// reduction order that deterministic mode will pin.
+
+#include "core/dtype.h"
+
+#include <cstddef>
+#include <cstdint>
+
+namespace axon::kernels {
+
+// Normal rotates adjacent pairs (x[2i], x[2i+1]) as Llama 2 and Llama 3 do once the GGUF
+// converter has permuted their Q/K weights. NeoX rotates halves (x[i], x[i + rotary_dim/2]) as
+// Qwen2 does.
+enum class RopeStyle { Normal, NeoX };
+
+struct RopeParams {
+  std::size_t head_dim;
+  std::size_t rotary_dim;  // even, at most head_dim; equal to head_dim for every target model
+  float theta;             // rope_freq_base
+  RopeStyle style;
+  const float* freq_factors;  // nullptr, or rotary_dim/2 divisors of inv_freq (Llama 3.x scaling)
+};
+
+struct KernelTable {
+  // y[n_out] = W[n_out][n_in] x[n_in]
+  void (*matmul_f32)(const float* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
+  void (*matmul_f16)(const std::uint16_t* w, const float* x, float* y, std::size_t n_out,
+                     std::size_t n_in);
+  void (*matmul_bf16)(const std::uint16_t* w, const float* x, float* y, std::size_t n_out,
+                      std::size_t n_in);
+  // Y[n_rows][n_out] = X[n_rows][n_in] W^T (prefill)
+  void (*matmul_f32_rows)(const float* w, const float* x, float* y, std::size_t n_rows,
+                          std::size_t n_out, std::size_t n_in);
+  void (*matmul_f16_rows)(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
+                          std::size_t n_out, std::size_t n_in);
+  void (*matmul_bf16_rows)(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
+                           std::size_t n_out, std::size_t n_in);
+
+  // y = x / sqrt(mean(x^2) + eps) * weight
+  void (*rmsnorm)(const float* x, const float* weight, float* y, std::size_t n, float eps);
+  // In place on x[n_heads][head_dim] for one position.
+  void (*rope)(float* x, std::size_t n_heads, std::size_t pos, const RopeParams& params);
+  // In place, max-subtracted so any input range is safe.
+  void (*softmax)(float* x, std::size_t n);
+  // out = silu(gate) * up
+  void (*silu_mul)(const float* gate, const float* up, float* out, std::size_t n);
+  // out[n] = row `index` of a [rows][n] table of the given type, converted to float.
+  void (*embedding_row)(DType type, const void* table, std::size_t n, std::int64_t index,
+                        float* out);
+  // Full-sequence causal attention with grouped-query heads (head h reads kv head
+  // h / (n_head / n_head_kv)).
+  //   q: [seq][n_head][head_dim]   k, v: [seq][n_head_kv][head_dim]   out: [seq][n_head][head_dim]
+  //   scores: scratch of at least seq * seq floats
+  void (*attention)(const float* q, const float* k, const float* v, float* out, float* scores,
+                    std::size_t seq, std::size_t n_head, std::size_t n_head_kv,
+                    std::size_t head_dim, float scale);
+};
+
+// The table in use. Scalar until runtime dispatch lands.
+const KernelTable& kernels();
+// Always the scalar reference, the baseline every optimized table is tested against.
+const KernelTable& scalar_kernels();
+
+}  // namespace axon::kernels
