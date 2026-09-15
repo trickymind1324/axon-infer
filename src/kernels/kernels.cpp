@@ -14,6 +14,7 @@ constexpr KernelTable kScalarTable{
     .matmul_f16_rows = ref::matmul_f16_rows,
     .matmul_bf16_rows = ref::matmul_bf16_rows,
     .rmsnorm = ref::rmsnorm,
+    .rope = ref::rope,
     .softmax = ref::softmax,
     .silu_mul = ref::silu_mul,
     .embedding_row = ref::embedding_row,
