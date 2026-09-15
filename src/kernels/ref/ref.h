@@ -23,5 +23,6 @@ void matmul_bf16_rows(const std::uint16_t* w, const float* x, float* y, std::siz
 void rmsnorm(const float* x, const float* weight, float* y, std::size_t n, float eps);
 void softmax(float* x, std::size_t n);
 void silu_mul(const float* gate, const float* up, float* out, std::size_t n);
+void embedding_row(DType type, const void* table, std::size_t n, std::int64_t index, float* out);
 
 }  // namespace axon::kernels::ref

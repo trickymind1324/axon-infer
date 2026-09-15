@@ -16,6 +16,7 @@ constexpr KernelTable kScalarTable{
     .rmsnorm = ref::rmsnorm,
     .softmax = ref::softmax,
     .silu_mul = ref::silu_mul,
+    .embedding_row = ref::embedding_row,
 };
 
 }  // namespace
