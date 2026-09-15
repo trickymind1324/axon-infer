@@ -1,9 +1,15 @@
+#include "core/dtype.h"
 #include "core/threadpool.h"
+
+#include "kernels/kernels.h"
 
 #include <benchmark/benchmark.h>
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <random>
+#include <vector>
 
 namespace {
 
@@ -23,6 +29,67 @@ void bm_parallel_for_overhead(benchmark::State& state) {
   state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations()));
 }
 
+std::vector<float> random_floats(std::size_t n, std::uint32_t seed) {
+  std::mt19937 rng(seed);
+  std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
+  std::vector<float> out(n);
+  for (auto& v : out) {
+    v = dist(rng);
+  }
+  return out;
+}
+
+// Reports GFLOP/s (two flops per weight) and GB/s of weights read, which is the number that
+// matters: a decode step is one pass over every weight in the model.
+void report_matmul(benchmark::State& state, std::size_t n_out, std::size_t n_in,
+                   std::size_t weight_bytes) {
+  const auto calls = static_cast<double>(state.iterations());
+  state.counters["GFLOP/s"] =
+      benchmark::Counter(calls * 2.0 * static_cast<double>(n_out * n_in),
+                         benchmark::Counter::kIsRate, benchmark::Counter::kIs1000);
+  state.counters["GB/s"] =
+      benchmark::Counter(calls * static_cast<double>(weight_bytes), benchmark::Counter::kIsRate,
+                         benchmark::Counter::kIs1000);
+}
+
+// Single-vector matmul at the shapes of the SmolLM2-135M (576 x 1536) and 2B-class
+// (2048 x 2048, 2048 x 8192) projections. Args are {n_out, n_in}.
+void bm_matmul_f32(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const auto w = random_floats(n_out * n_in, 1);
+  const auto x = random_floats(n_in, 2);
+  std::vector<float> y(n_out);
+  const auto& k = axon::kernels::kernels();
+  for (auto _ : state) {
+    k.matmul_f32(w.data(), x.data(), y.data(), n_out, n_in);
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul(state, n_out, n_in, w.size() * sizeof(float));
+}
+
+void bm_matmul_f16(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const auto w_f32 = random_floats(n_out * n_in, 1);
+  std::vector<std::uint16_t> w(w_f32.size());
+  for (std::size_t i = 0; i < w.size(); ++i) {
+    w[i] = axon::fp32_to_fp16(w_f32[i]);
+  }
+  const auto x = random_floats(n_in, 2);
+  std::vector<float> y(n_out);
+  const auto& k = axon::kernels::kernels();
+  for (auto _ : state) {
+    k.matmul_f16(w.data(), x.data(), y.data(), n_out, n_in);
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul(state, n_out, n_in, w.size() * sizeof(std::uint16_t));
+}
+
 }  // namespace
 
 BENCHMARK(bm_parallel_for_overhead)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->UseRealTime();
+BENCHMARK(bm_matmul_f32)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
+BENCHMARK(bm_matmul_f16)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
