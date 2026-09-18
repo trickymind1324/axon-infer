@@ -34,9 +34,16 @@ if [ "${SKIP_TIDY:-0}" != "1" ]; then
   cmake --build --preset tidy
 fi
 
+# ctest runs each test from the build tree, so the model and fixture paths must be absolute.
 if [ -d "${AXON_MODELS_DIR:-models}" ] && ls "${AXON_MODELS_DIR:-models}"/*.gguf >/dev/null 2>&1; then
   step "integration tests (models found)"
-  AXON_MODELS_DIR="${AXON_MODELS_DIR:-models}" ctest --preset release -L integration
+  MODELS_ABS="$(cd "${AXON_MODELS_DIR:-models}" && pwd)"
+  LOCAL_ABS=""
+  if [ -d tests/reference/local ]; then
+    LOCAL_ABS="$(cd tests/reference/local && pwd)"
+  fi
+  AXON_MODELS_DIR="$MODELS_ABS" AXON_LOCAL_FIXTURES="$LOCAL_ABS" \
+    ctest --preset release -L integration --output-on-failure
 fi
 
 step "benchmark smoke"
