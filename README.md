@@ -33,7 +33,7 @@ prompt ──▶ Tokenizer ──▶ ids ──▶ prefill ──▶ KV cache �
 
 Layers underneath: `core` (arena allocator, thread pool, GGUF reader, dtypes), `kernels` (scalar reference plus NEON and AVX2 variants selected at runtime), `model` (LLaMA block, KV cache), `tokenizer`, `sampling`, `engine` (generation loop, batching).
 
-Design rules: weights are memory-mapped and never copied; activations come from one arena sized at load; no heap allocation in the decode loop; every kernel has a scalar reference and a test against it before any SIMD version exists.
+Design rules: weights are memory-mapped and never copied. Activations come from one arena sized at load. The decode loop never allocates on the heap. Every kernel has a scalar reference and a test against it before any SIMD version exists.
 
 ## Benchmarks
 
@@ -97,7 +97,7 @@ generated 20 tokens in 70.60 s (0.28 tok/s), load 0.01 s, arena 5.0 MB
 
 ### Forward pass
 
-`LlamaModel` reads its configuration from the GGUF metadata (`llama` and `qwen2` architectures), binds every weight with an exact shape and dtype check, and runs the block in the order the paper gives it: RMSNorm, Q/K/V projections, RoPE, causal grouped-query attention, output projection, RMSNorm, SwiGLU feed-forward, each with a residual add. Weights stay memory-mapped; activations come from one arena sized at load, and a test asserts the computed size equals the measured high-water mark and that a forward pass performs no heap allocation.
+`LlamaModel` reads its configuration from the GGUF metadata (`llama` and `qwen2` architectures), binds every weight with an exact shape and dtype check, and runs the block in the order the paper gives it: RMSNorm, Q/K/V projections, RoPE, causal grouped-query attention, output projection, RMSNorm, SwiGLU feed-forward, each with a residual add. Weights stay memory-mapped. Activations come from one arena sized at load, and a test asserts that the computed size equals the measured high-water mark and that a forward pass performs no heap allocation.
 
 Correctness is checked two ways. A float64 NumPy forward over a committed two-layer synthetic model runs in every preset with no download. With models present, SmolLM2-135M is compared against Hugging Face `LlamaForCausalLM` loaded from the same GGUF file: the argmax matches at every position of ten prompts, the logits agree to better than 5e-5 on a range of about 46, and 20-token greedy continuations match for five prompts. `--dump-layer N --dump-dir D` writes one layer's activations, `gen_model_fixtures.py --dump-hf N` writes the same tensors from Hugging Face hooks, and `scripts/compare_dumps.py` prints the difference per tensor.
 
@@ -147,7 +147,7 @@ Tokenizer fixtures are tokenizer-only GGUF files (metadata without tensors) plus
 
 Kernel fixtures are `.axt` files (a 4-byte magic, dims, dtype, raw data) written by `tests/reference/gen_kernel_fixtures.py`. To add a kernel: declare it in `src/kernels/kernels.h` and `src/kernels/ref/ref.h`, implement the scalar version under `src/kernels/ref/`, register it in the table in `src/kernels/kernels.cpp`, add its reference to the generator and regenerate, then write a fixture test plus at least one property test under `tests/unit/`. Optimized variants come later as separate tables checked against `scalar_kernels()`.
 
-Model fixtures come from `tests/reference/gen_model_fixtures.py`: the synthetic logits by default, and the SmolLM2 references with `--smollm2 models/SmolLM2-135M-Instruct-f16.gguf` (needs `torch`, `transformers` and `accelerate` in the venv). The committed SmolLM2 set is about 2 MB; the full per-position logits land in the gitignored `tests/reference/local/` and are checked by the integration tests when `AXON_LOCAL_FIXTURES` points there. The SmolLM2 integration tests take about ten minutes on the scalar path because the greedy test recomputes the sequence at every step.
+Model fixtures come from `tests/reference/gen_model_fixtures.py`: the synthetic logits by default, and the SmolLM2 references with `--smollm2 models/SmolLM2-135M-Instruct-f16.gguf` (needs `torch`, `transformers` and `accelerate` in the venv). The committed SmolLM2 set is about 2 MB. The full per-position logits land in the gitignored `tests/reference/local/` and are checked by the integration tests when `AXON_LOCAL_FIXTURES` points there. The SmolLM2 integration tests take about ten minutes on the scalar path because the greedy test recomputes the sequence at every step.
 
 The GGUF parser is fuzzed two ways: a deterministic corruption replay runs inside the normal unit tests under every preset, and a libFuzzer target builds with the `fuzz` preset on Linux clang.
 
