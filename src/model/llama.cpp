@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace axon::model {
 
@@ -122,7 +123,7 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
                       fmt::format("forward: {} tokens exceed max_seq {}", seq, max_seq_));
   }
   for (const std::int32_t id : tokens) {
-    if (id < 0 || static_cast<std::uint32_t>(id) >= cfg_.n_vocab) {
+    if (id < 0 || std::cmp_greater_equal(id, cfg_.n_vocab)) {
       return make_error(ErrorCode::InvalidArgument,
                         fmt::format("forward: token id {} outside [0, {})", id, cfg_.n_vocab));
     }
@@ -171,7 +172,7 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
     matmul_rows(w.wq, a.h.data(), a.q.data(), seq);
     matmul_rows(w.wk, a.h.data(), a.k.data(), seq);
     matmul_rows(w.wv, a.h.data(), a.v.data(), seq);
-    if (w.bq) {
+    if (w.bq && w.bk && w.bv) {
       add_bias(a.q, *w.bq, seq);
       add_bias(a.k, *w.bk, seq);
       add_bias(a.v, *w.bv, seq);

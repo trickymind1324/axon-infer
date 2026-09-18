@@ -2,13 +2,14 @@
 
 #include <fmt/format.h>
 
+#include <cstdint>
 #include <string>
 
 namespace axon::model {
 
 namespace {
 
-enum class Kind { Norm, Matmul, Bias };
+enum class Kind : std::uint8_t { Norm, Matmul, Bias };
 
 // Looks up one tensor and checks it is exactly what the forward pass will index.
 Expected<Tensor> bind_tensor(const GGUFFile& file, const std::string& name, Kind kind,
@@ -66,7 +67,7 @@ Expected<LlamaWeights> LlamaWeights::bind(const GGUFFile& file, const LlamaConfi
     if (!bound) {                                                                                  \
       return bound.error();                                                                        \
     }                                                                                              \
-    target = *bound;                                                                               \
+    (target) = *bound;                                                                             \
   } while (false)
 
   AXON_BIND(w.token_embd, "token_embd.weight", Kind::Matmul, d, cfg.n_vocab);

@@ -182,8 +182,9 @@ int run_generate(const GenerateOptions& opt) {
     }
     const std::size_t n_vocab = model.config().n_vocab;
     const float* last = logits->data() + (ids.size() - 1) * n_vocab;
-    const auto next = static_cast<std::int32_t>(std::max_element(last, last + n_vocab) - last);
-    if (std::find(eog.begin(), eog.end(), next) != eog.end()) {
+    const auto next =
+        static_cast<std::int32_t>(std::ranges::max_element(last, last + n_vocab) - last);
+    if (std::ranges::find(eog, next) != eog.end()) {
       break;
     }
     ids.push_back(next);

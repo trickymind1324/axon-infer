@@ -34,9 +34,7 @@ void bm_forward(benchmark::State& state, const std::string& path) {
       static_cast<double>((*model)->arena_high_water()) / (1024.0 * 1024.0);
 }
 
-std::string synthetic_path() {
-  return AXON_FIXTURE_DIR "/gguf/synthetic-2l.gguf";
-}
+constexpr const char* kSyntheticPath = AXON_FIXTURE_DIR "/gguf/synthetic-2l.gguf";
 
 std::string smollm2_path() {
   const char* dir = std::getenv("AXON_MODELS_DIR");
@@ -48,7 +46,7 @@ std::string smollm2_path() {
 }
 
 const int kRegistered = [] {
-  benchmark::RegisterBenchmark("bm_forward_synthetic", bm_forward, synthetic_path())
+  benchmark::RegisterBenchmark("bm_forward_synthetic", bm_forward, std::string(kSyntheticPath))
       ->Arg(1)
       ->Arg(32)
       ->Arg(128)

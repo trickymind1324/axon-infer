@@ -41,9 +41,11 @@ Expected<LlamaConfig> LlamaConfig::from_gguf(const GGUFFile& file) {
     std::uint32_t* field;
   };
   const Required required[] = {
-      {"block_count", &cfg.n_layer},         {"embedding_length", &cfg.n_embd},
-      {"attention.head_count", &cfg.n_head}, {"feed_forward_length", &cfg.n_ff},
-      {"context_length", &cfg.n_ctx_train},
+      {.suffix = "block_count", .field = &cfg.n_layer},
+      {.suffix = "embedding_length", .field = &cfg.n_embd},
+      {.suffix = "attention.head_count", .field = &cfg.n_head},
+      {.suffix = "feed_forward_length", .field = &cfg.n_ff},
+      {.suffix = "context_length", .field = &cfg.n_ctx_train},
   };
   for (const auto& r : required) {
     auto value = get_u32(file, key(r.suffix));
