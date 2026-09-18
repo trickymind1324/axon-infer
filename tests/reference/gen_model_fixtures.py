@@ -27,11 +27,17 @@ forward hooks with the same names LlamaModel's dump uses, for scripts/compare_du
 """
 
 import argparse
+import importlib.metadata
 import struct
 from pathlib import Path
 
+import gguf
 import numpy as np
 from gguf import GGUFReader
+
+# transformers reads gguf.__version__ when the wheel ships no top_level.txt (Python 3.10).
+if not hasattr(gguf, "__version__"):
+    gguf.__version__ = importlib.metadata.version("gguf")
 
 HERE = Path(__file__).parent
 OUT = HERE / "fixtures" / "model"
@@ -165,7 +171,7 @@ def load_hf(gguf_path: Path):
 
     gguf_path = gguf_path.resolve()
     model = AutoModelForCausalLM.from_pretrained(
-        str(gguf_path.parent), gguf_file=gguf_path.name, torch_dtype=torch.float32
+        str(gguf_path.parent), gguf_file=gguf_path.name, dtype=torch.float32
     )
     model.eval()
     tok = AutoTokenizer.from_pretrained(str(gguf_path.parent), gguf_file=gguf_path.name)
