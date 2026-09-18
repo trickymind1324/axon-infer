@@ -74,7 +74,7 @@ Expected<AxtTensor> parse_axt(std::span<const std::byte> bytes) {
     return make_error(ErrorCode::Parse, "axt: bad magic or truncated header");
   }
   std::size_t offset = 4;
-  const std::uint32_t ndim = read_le<std::uint32_t>(bytes.data() + offset);
+  const auto ndim = read_le<std::uint32_t>(bytes.data() + offset);
   offset += 4;
   if (ndim > kMaxDims) {
     return make_error(ErrorCode::Parse,
@@ -88,7 +88,7 @@ Expected<AxtTensor> parse_axt(std::span<const std::byte> bytes) {
     t.dims.push_back(read_le<std::uint64_t>(bytes.data() + offset));
     offset += sizeof(std::uint64_t);
   }
-  const std::uint32_t type = read_le<std::uint32_t>(bytes.data() + offset);
+  const auto type = read_le<std::uint32_t>(bytes.data() + offset);
   offset += sizeof(std::uint32_t);
   if (type > 3) {
     return make_error(ErrorCode::Parse, fmt::format("axt: unknown dtype {}", type));
