@@ -24,3 +24,6 @@ __pycache__/
 .idea/
 .cache/
 .DS_Store
+
+# regenerated locally, too large to commit
+tests/reference/local/
