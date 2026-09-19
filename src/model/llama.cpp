@@ -37,11 +37,11 @@ void matmul_rows(const Tensor& w, const float* x, float* y, std::size_t n_rows) 
   }
 }
 
-void add_bias(std::span<float> rows, const Tensor& bias, std::size_t n_rows) {
+void add_bias(float* rows, const Tensor& bias, std::size_t n_rows) {
   const auto* b = static_cast<const float*>(bias.data);
   const auto n = static_cast<std::size_t>(bias.ne0);
   for (std::size_t r = 0; r < n_rows; ++r) {
-    float* row = rows.data() + r * n;
+    float* row = rows + r * n;
     for (std::size_t i = 0; i < n; ++i) {
       row[i] += b[i];
     }
@@ -63,14 +63,14 @@ void rmsnorm_rows(std::span<const float> x, const Tensor& weight, std::span<floa
   }
 }
 
-// Writes one activation as <dump_dir>/<name>.axt with shape [seq][cols]. A no-op unless a
+// Writes one activation as <dump_dir>/<name>.axt with shape [rows][cols]. A no-op unless a
 // dump was requested; the arena path never touches the heap.
 Expected<bool> dump(const ForwardOptions& opts, bool wanted, const char* name,
-                    std::span<const float> data, std::size_t seq) {
+                    std::span<const float> data, std::size_t rows) {
   if (!wanted) {
     return true;
   }
-  const std::uint64_t dims[] = {seq, data.size() / seq};
+  const std::uint64_t dims[] = {rows, data.size() / rows};
   auto written = write_axt_f32(opts.dump_dir / fmt::format("{}.axt", name), dims, data);
   if (!written) {
     return written.error();
@@ -81,13 +81,14 @@ Expected<bool> dump(const ForwardOptions& opts, bool wanted, const char* name,
 }  // namespace
 
 LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer> tokenizer,
-                       LlamaWeights weights, std::size_t max_seq)
+                       LlamaWeights weights, LoadOptions options)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
-      weights_(std::move(weights)), max_seq_(max_seq), arena_(cfg_.activation_bytes(max_seq)) {}
+      weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
+      arena_(cfg_.activation_bytes(max_seq_, max_ctx_)) {}
 
 Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::path& path,
-                                                       std::size_t max_seq) {
-  if (max_seq == 0) {
+                                                       LoadOptions options) {
+  if (options.max_seq == 0) {
     return make_error(ErrorCode::InvalidArgument, "max_seq: expected at least 1, found 0");
   }
   auto file = GGUFFile::open(path);
@@ -97,6 +98,19 @@ Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::pa
   auto cfg = LlamaConfig::from_gguf(*file);
   if (!cfg) {
     return make_error(cfg.error().code, fmt::format("{}: {}", path.string(), cfg.error().message));
+  }
+  if (options.max_ctx < options.max_seq) {
+    return make_error(
+        ErrorCode::InvalidArgument,
+        fmt::format("max_ctx {} is smaller than max_seq {}", options.max_ctx, options.max_seq));
+  }
+  // A cache longer than the training context is never useful, and a per-call chunk longer
+  // than the cache can never be fed, so both are clamped rather than refused.
+  if (options.max_ctx > cfg->n_ctx_train) {
+    options.max_ctx = cfg->n_ctx_train;
+  }
+  if (options.max_seq > options.max_ctx) {
+    options.max_seq = options.max_ctx;
   }
   auto tokenizer = Tokenizer::from_gguf(*file);
   if (!tokenizer) {
@@ -109,11 +123,28 @@ Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::pa
                       fmt::format("{}: {}", path.string(), weights.error().message));
   }
   return std::unique_ptr<LlamaModel>(new LlamaModel(
-      std::move(*file), std::move(*cfg), std::move(*tokenizer), std::move(*weights), max_seq));
+      std::move(*file), std::move(*cfg), std::move(*tokenizer), std::move(*weights), options));
 }
 
 Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_t> tokens,
                                                      const ForwardOptions& opts) {
+  return run(tokens, nullptr, opts);
+}
+
+Expected<std::span<const float>> LlamaModel::forward_prefill(KVCache& cache,
+                                                             std::span<const std::int32_t> tokens) {
+  return run(tokens, &cache, ForwardOptions{});
+}
+
+Expected<std::span<const float>> LlamaModel::forward_one(KVCache& cache, std::int32_t token) {
+  return run(std::span<const std::int32_t>(&token, 1), &cache, ForwardOptions{});
+}
+
+// The one forward pass. Without a cache, keys and values live in the arena and the attention
+// spans the new tokens only. With a cache, new keys and values are written straight into the
+// cache rows after the ones already there, and the attention spans the whole cache.
+Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> tokens,
+                                                 KVCache* cache, const ForwardOptions& opts) {
   const std::size_t seq = tokens.size();
   if (seq == 0) {
     return make_error(ErrorCode::InvalidArgument, "forward: empty token sequence");
@@ -128,6 +159,18 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
                         fmt::format("forward: token id {} outside [0, {})", id, cfg_.n_vocab));
     }
   }
+  const std::size_t n_past = cache != nullptr ? cache->pos() : 0;
+  if (cache != nullptr) {
+    if (!cache->matches(cfg_)) {
+      return make_error(ErrorCode::InvalidArgument,
+                        "forward: the cache was built for a different model");
+    }
+    if (n_past + seq > cache->max_ctx()) {
+      return make_error(ErrorCode::InvalidArgument,
+                        fmt::format("context overflow: {} cached + {} new tokens exceed {}", n_past,
+                                    seq, cache->max_ctx()));
+    }
+  }
 
   const auto& k = kernels::kernels();
   const std::size_t n_embd = cfg_.n_embd;
@@ -135,6 +178,8 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
   const std::size_t head_dim = cfg_.head_dim;
   const std::size_t n_head = cfg_.n_head;
   const std::size_t n_head_kv = cfg_.n_head_kv;
+  const std::size_t kv_row = cfg_.n_embd_kv();
+  const std::size_t total = n_past + seq;
   const bool dumping = opts.dump_layer != ForwardOptions::kNoDump;
   const kernels::RopeParams rope{
       .head_dim = head_dim,
@@ -146,7 +191,7 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
   const float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
 
   arena_.reset();
-  Activations a = allocate_activations(arena_, cfg_, seq);
+  Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr);
 
 #define AXON_DUMP(wanted, name, span)                                                              \
   do {                                                                                             \
@@ -165,27 +210,32 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
   for (std::size_t l = 0; l < cfg_.n_layer; ++l) {
     const LayerWeights& w = weights_.layers[l];
     const bool dump_this = dumping && opts.dump_layer == l;
+    // Where this call's keys and values go, and where the attention reads all of them from.
+    float* k_base = cache != nullptr ? cache->k(l) : a.k.data();
+    float* v_base = cache != nullptr ? cache->v(l) : a.v.data();
+    float* k_new = k_base + n_past * kv_row;
+    float* v_new = v_base + n_past * kv_row;
     AXON_DUMP(dump_this, "x_in", a.x);
 
     rmsnorm_rows(a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "attn_norm_out", a.h);
     matmul_rows(w.wq, a.h.data(), a.q.data(), seq);
-    matmul_rows(w.wk, a.h.data(), a.k.data(), seq);
-    matmul_rows(w.wv, a.h.data(), a.v.data(), seq);
+    matmul_rows(w.wk, a.h.data(), k_new, seq);
+    matmul_rows(w.wv, a.h.data(), v_new, seq);
     if (w.bq && w.bk && w.bv) {
-      add_bias(a.q, *w.bq, seq);
-      add_bias(a.k, *w.bk, seq);
-      add_bias(a.v, *w.bv, seq);
+      add_bias(a.q.data(), *w.bq, seq);
+      add_bias(k_new, *w.bk, seq);
+      add_bias(v_new, *w.bv, seq);
     }
     for (std::size_t i = 0; i < seq; ++i) {
-      k.rope(a.q.data() + i * n_head * head_dim, n_head, i, rope);
-      k.rope(a.k.data() + i * n_head_kv * head_dim, n_head_kv, i, rope);
+      k.rope(a.q.data() + i * n_head * head_dim, n_head, n_past + i, rope);
+      k.rope(k_new + i * kv_row, n_head_kv, n_past + i, rope);
     }
     AXON_DUMP(dump_this, "q", a.q);
-    AXON_DUMP(dump_this, "k", a.k);
-    AXON_DUMP(dump_this, "v", a.v);
-    k.attention(a.q.data(), a.k.data(), a.v.data(), a.attn.data(), a.scores.data(), seq, n_head,
-                n_head_kv, head_dim, scale);
+    AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
+    AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
+    k.attention_kv(a.q.data(), k_base, v_base, a.attn.data(), a.scores.data(), seq, n_past, n_head,
+                   n_head_kv, head_dim, scale);
     AXON_DUMP(dump_this, "attn_out", a.attn);
     matmul_rows(w.wo, a.attn.data(), a.h.data(), seq);
     add_rows(a.x, a.h);
@@ -206,6 +256,9 @@ Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_
   matmul_rows(weights_.output, a.h.data(), a.logits.data(), seq);
   AXON_DUMP(dumping, "logits", a.logits);
 #undef AXON_DUMP
+  if (cache != nullptr) {
+    cache->advance(seq);
+  }
   return std::span<const float>(a.logits);
 }
 

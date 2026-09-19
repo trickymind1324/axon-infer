@@ -130,8 +130,8 @@ TEST_CASE("activation bytes grow with the sequence", "[model][config]") {
   const auto file = open_fixture("synthetic-2l.gguf");
   const auto cfg = axon::model::LlamaConfig::from_gguf(file);
   REQUIRE(cfg);
-  const auto one = cfg->activation_bytes(1);
-  const auto many = cfg->activation_bytes(64);
+  const auto one = cfg->activation_bytes(1, 1);
+  const auto many = cfg->activation_bytes(64, 64);
   CHECK(one > 0);
   CHECK(many > one);
   CHECK(one % 64 == 0);

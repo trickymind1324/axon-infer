@@ -17,27 +17,33 @@ struct Activations {
   std::span<float> x;       // [seq][n_embd] residual stream
   std::span<float> h;       // [seq][n_embd] normed input, then projection outputs
   std::span<float> q;       // [seq][n_head * head_dim]
-  std::span<float> k;       // [seq][n_head_kv * head_dim]
-  std::span<float> v;       // [seq][n_head_kv * head_dim]
+  std::span<float> k;       // [seq][n_head_kv * head_dim], unused when a cache holds the keys
+  std::span<float> v;       // [seq][n_head_kv * head_dim], likewise
   std::span<float> attn;    // [seq][n_head * head_dim]
   std::span<float> gate;    // [seq][n_ff]
   std::span<float> up;      // [seq][n_ff]
-  std::span<float> scores;  // [seq][seq] attention scratch
+  std::span<float> scores;  // [seq][ctx] attention scratch, ctx = positions attended over
   std::span<float> logits;  // [seq][n_vocab]
 };
 
+// seq is the number of new positions in this call, ctx the total the attention scores span
+// (seq for the cache-free pass, cached + seq with a cache). with_kv allocates the k and v
+// buffers the cache-free pass needs.
 template <class Alloc>
-Activations allocate_activations(Alloc& alloc, const LlamaConfig& cfg, std::size_t seq) {
+Activations allocate_activations(Alloc& alloc, const LlamaConfig& cfg, std::size_t seq,
+                                 std::size_t ctx, bool with_kv) {
   Activations a;
   a.x = alloc.template alloc_array<float>(seq * cfg.n_embd);
   a.h = alloc.template alloc_array<float>(seq * cfg.n_embd);
   a.q = alloc.template alloc_array<float>(seq * cfg.n_embd_q());
-  a.k = alloc.template alloc_array<float>(seq * cfg.n_embd_kv());
-  a.v = alloc.template alloc_array<float>(seq * cfg.n_embd_kv());
+  if (with_kv) {
+    a.k = alloc.template alloc_array<float>(seq * cfg.n_embd_kv());
+    a.v = alloc.template alloc_array<float>(seq * cfg.n_embd_kv());
+  }
   a.attn = alloc.template alloc_array<float>(seq * cfg.n_embd_q());
   a.gate = alloc.template alloc_array<float>(seq * cfg.n_ff);
   a.up = alloc.template alloc_array<float>(seq * cfg.n_ff);
-  a.scores = alloc.template alloc_array<float>(seq * seq);
+  a.scores = alloc.template alloc_array<float>(seq * ctx);
   a.logits = alloc.template alloc_array<float>(seq * cfg.n_vocab);
   return a;
 }

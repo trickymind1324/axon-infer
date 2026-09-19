@@ -17,6 +17,8 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -114,16 +116,23 @@ struct GenerateOptions {
   std::string prompt;
   int n_tokens = 20;
   std::size_t max_seq = 256;
+  std::size_t ctx = 2048;
+  bool no_cache = false;
   bool no_bos = false;
   std::size_t dump_layer = axon::model::ForwardOptions::kNoDump;
   std::string dump_dir = "dump-axon";
 };
 
-// Greedy generation without a cache: every step runs the whole sequence again. Slow by
-// design, and the reference the cached path must reproduce bit for bit.
+// Greedy generation. The default path prefills the prompt into a KV cache and decodes one
+// token per step. --no-cache keeps the cache-free loop that recomputes the whole sequence each
+// step, which is also the only path that can dump activations.
 int run_generate(const GenerateOptions& opt) {
+  const bool dumping = opt.dump_layer != axon::model::ForwardOptions::kNoDump;
+  const bool use_cache = !opt.no_cache && !dumping;
   const auto t_load = std::chrono::steady_clock::now();
-  auto loaded = axon::model::LlamaModel::load(opt.model, opt.max_seq);
+  const std::size_t ctx = use_cache ? opt.ctx : opt.max_seq;
+  auto loaded = axon::model::LlamaModel::load(
+      opt.model, {.max_seq = std::min(opt.max_seq, ctx), .max_ctx = ctx});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -138,67 +147,99 @@ int run_generate(const GenerateOptions& opt) {
       tokenizer.encode(prompt, {.add_bos = opt.no_bos ? std::optional<bool>(false) : std::nullopt});
   fmt::print("model: {} ({})\n", model.file().model_name(), model.config().describe());
   fmt::print("prompt: {} tokens\n", ids.size());
-  if (ids.size() > opt.max_seq) {
-    fmt::print(stderr, "error: prompt has {} tokens, more than --max-seq {}\n", ids.size(),
-               opt.max_seq);
+  const std::size_t limit = use_cache ? model.max_ctx() : model.max_seq();
+  if (ids.size() >= limit) {
+    fmt::print(stderr, "error: prompt has {} tokens, which leaves no room in a context of {}\n",
+               ids.size(), limit);
     return 2;
   }
   const auto load_seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_load).count();
 
   axon::model::ForwardOptions forward_options;
-  if (opt.dump_layer != axon::model::ForwardOptions::kNoDump) {
+  if (dumping) {
     forward_options.dump_layer = opt.dump_layer;
     forward_options.dump_dir = opt.dump_dir;
     std::filesystem::create_directories(forward_options.dump_dir);
   }
+  const std::size_t n_vocab = model.config().n_vocab;
+  const auto pick = [&](std::span<const float> logits) {
+    const float* last = logits.data() + (logits.size() / n_vocab - 1) * n_vocab;
+    return static_cast<std::int32_t>(std::ranges::max_element(last, last + n_vocab) - last);
+  };
+  const auto eog = tokenizer.eog_tokens();
+  const auto is_eog = [&](std::int32_t id) { return std::ranges::find(eog, id) != eog.end(); };
 
   fmt::print("{}", prompt);
   std::fflush(stdout);
   axon::StreamingDecoder decoder(tokenizer);
-  const auto eog = tokenizer.eog_tokens();
-  const auto t_gen = std::chrono::steady_clock::now();
-  int generated = 0;
-  const bool dump_only =
-      opt.n_tokens <= 0 && opt.dump_layer != axon::model::ForwardOptions::kNoDump;
-  if (dump_only) {
-    // Nothing to generate, but the dump still needs one pass over the prompt.
+  std::optional<axon::model::KVCache> cache;
+  if (use_cache) {
+    cache.emplace(model.new_cache());
+  }
+
+  // Prefill: the prompt in chunks of max_seq with a cache, or one dump-capable pass without.
+  const auto t_prefill = std::chrono::steady_clock::now();
+  std::int32_t next = 0;
+  if (use_cache) {
+    for (std::size_t offset = 0; offset < ids.size(); offset += model.max_seq()) {
+      const std::size_t n = std::min(model.max_seq(), ids.size() - offset);
+      const auto logits = model.forward_prefill(*cache, std::span(ids).subspan(offset, n));
+      if (!logits) {
+        fmt::print(stderr, "\nerror: {}\n", logits.error().message);
+        return 2;
+      }
+      next = pick(*logits);
+    }
+  } else {
     const auto logits = model.forward(ids, forward_options);
     if (!logits) {
       fmt::print(stderr, "\nerror: {}\n", logits.error().message);
       return 2;
     }
+    next = pick(*logits);
   }
-  for (; generated < opt.n_tokens; ++generated) {
-    if (ids.size() >= opt.max_seq) {
+  const auto prefill_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t_prefill).count();
+
+  const auto t_decode = std::chrono::steady_clock::now();
+  int generated = 0;
+  while (generated < opt.n_tokens && !is_eog(next) && ids.size() < limit) {
+    ids.push_back(next);
+    ++generated;
+    fmt::print("{}", decoder.push(next));
+    std::fflush(stdout);
+    if (generated == opt.n_tokens || ids.size() >= limit) {
       break;
     }
-    // Only the first step writes the dump; later steps would overwrite it with longer rows.
-    const auto logits =
-        model.forward(ids, generated == 0 ? forward_options : axon::model::ForwardOptions{});
+    const auto logits = use_cache ? model.forward_one(*cache, next) : model.forward(ids);
     if (!logits) {
       fmt::print(stderr, "\nerror: {}\n", logits.error().message);
       return 2;
     }
-    const std::size_t n_vocab = model.config().n_vocab;
-    const float* last = logits->data() + (ids.size() - 1) * n_vocab;
-    const auto next =
-        static_cast<std::int32_t>(std::ranges::max_element(last, last + n_vocab) - last);
-    if (std::ranges::find(eog, next) != eog.end()) {
-      break;
-    }
-    ids.push_back(next);
-    fmt::print("{}", decoder.push(next));
-    std::fflush(stdout);
+    next = pick(*logits);
   }
   fmt::print("{}\n", decoder.flush());
-  const auto gen_seconds =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - t_gen).count();
-  fmt::print("generated {} tokens in {:.2f} s ({:.2f} tok/s), load {:.2f} s, arena {:.1f} MB\n",
-             generated, gen_seconds,
-             generated > 0 ? static_cast<double>(generated) / gen_seconds : 0.0, load_seconds,
+  const auto decode_seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - t_decode).count();
+  const auto rate = [](int n, double seconds) {
+    return seconds > 0.0 && n > 0 ? static_cast<double>(n) / seconds : 0.0;
+  };
+  const auto prompt_tokens = static_cast<int>(ids.size()) - generated;
+  fmt::print("prefill {} tokens in {:.2f} s ({:.1f} tok/s), decode {} tokens in {:.2f} s "
+             "({:.2f} tok/s), load {:.2f} s, arena {:.1f} MB",
+             prompt_tokens, prefill_seconds, rate(prompt_tokens, prefill_seconds), generated,
+             decode_seconds, rate(generated, decode_seconds), load_seconds,
              static_cast<double>(model.arena_high_water()) / (1024.0 * 1024.0));
-  if (opt.dump_layer != axon::model::ForwardOptions::kNoDump) {
+  if (cache) {
+    fmt::print(", cache {:.1f} MB of {:.1f} MB",
+               static_cast<double>(cache->live_bytes()) / (1024.0 * 1024.0),
+               static_cast<double>(cache->bytes()) / (1024.0 * 1024.0));
+  } else {
+    fmt::print(", no cache");
+  }
+  fmt::print("\n");
+  if (dumping) {
     fmt::print("layer {} activations written to {}\n", opt.dump_layer, opt.dump_dir);
   }
   return 0;
@@ -229,8 +270,12 @@ int run(int argc, char** argv) {
   gen->add_option("--model,-m", generate.model, "path to a .gguf file")->required();
   gen->add_option("--prompt,-p", generate.prompt, "prompt text (reads stdin when omitted)");
   gen->add_option("--n-tokens,-n", generate.n_tokens, "tokens to generate")->default_val(20);
-  gen->add_option("--max-seq", generate.max_seq, "prompt plus generated token limit")
+  gen->add_option("--max-seq", generate.max_seq, "tokens per forward call (prompt chunk size)")
       ->default_val(256);
+  gen->add_option("--ctx", generate.ctx, "key/value cache length (prompt plus generated tokens)")
+      ->default_val(2048);
+  gen->add_flag("--no-cache", generate.no_cache,
+                "recompute the whole sequence every step instead of using the cache");
   gen->add_flag("--no-bos", generate.no_bos, "do not prepend the BOS token");
   gen->add_option("--dump-layer", generate.dump_layer,
                   "write this layer's activations from the first forward pass");

@@ -19,8 +19,8 @@ using Catch::Matchers::ContainsSubstring;
 namespace {
 
 std::unique_ptr<axon::model::LlamaModel> load_synthetic(std::size_t max_seq = 32) {
-  auto model =
-      axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l.gguf"), max_seq);
+  auto model = axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l.gguf"),
+                                             {.max_seq = max_seq, .max_ctx = max_seq});
   if (!model) {
     FAIL("cannot load the synthetic model: " << model.error().message);
   }
@@ -69,7 +69,7 @@ TEST_CASE("forward is deterministic and reuses the arena", "[model][forward]") {
   const auto first = run(*model, tokens);
   const auto second = run(*model, tokens);
   CHECK(first == second);
-  CHECK(model->arena_capacity() == model->config().activation_bytes(32));
+  CHECK(model->arena_capacity() == model->config().activation_bytes(32, 32));
 }
 
 TEST_CASE("the arena is sized exactly for max_seq", "[model][forward]") {
@@ -80,7 +80,7 @@ TEST_CASE("the arena is sized exactly for max_seq", "[model][forward]") {
     tokens[i] = static_cast<std::int32_t>((i * 37) % 512);
   }
   run(*model, tokens);
-  CHECK(model->arena_high_water() == model->config().activation_bytes(max_seq));
+  CHECK(model->arena_high_water() == model->config().activation_bytes(max_seq, max_seq));
   CHECK(model->arena_high_water() == model->arena_capacity());
 }
 
@@ -100,15 +100,15 @@ TEST_CASE("forward rejects bad input", "[model][forward]") {
   REQUIRE_FALSE(empty);
   CHECK_THAT(empty.error().message, ContainsSubstring("empty"));
 
-  const auto zero =
-      axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l.gguf"), 0);
+  const auto zero = axon::model::LlamaModel::load(
+      axon::test::fixture_path("gguf/synthetic-2l.gguf"), {.max_seq = 0, .max_ctx = 8});
   REQUIRE_FALSE(zero);
   CHECK_THAT(zero.error().message, ContainsSubstring("max_seq"));
 }
 
 TEST_CASE("loading a quantized file names the tensor", "[model][forward]") {
-  const auto model =
-      axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l-q4_0.gguf"), 8);
+  const auto model = axon::model::LlamaModel::load(
+      axon::test::fixture_path("gguf/synthetic-2l-q4_0.gguf"), {.max_seq = 8, .max_ctx = 8});
   REQUIRE_FALSE(model);
   CHECK_THAT(model.error().message, ContainsSubstring("synthetic-2l-q4_0.gguf"));
   CHECK_THAT(model.error().message, ContainsSubstring("Q4_0 has no kernels yet"));

@@ -2,36 +2,86 @@
 
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
 namespace {
 
-// Forward wall time per token over a full sequence, on the scalar single-threaded path. The
-// synthetic model always runs; SmolLM2 runs when AXON_MODELS_DIR holds the F16 file.
-void bm_forward(benchmark::State& state, const std::string& path) {
-  const auto seq = static_cast<std::size_t>(state.range(0));
-  auto model = axon::model::LlamaModel::load(path, seq);
+// Wall time per token on the scalar single-threaded path. Prefill runs the whole sequence
+// into an empty cache. Decode times one token at a fixed context depth: the cache is filled
+// once, then each iteration truncates back and decodes the same position again. The synthetic
+// model always runs, SmolLM2 when AXON_MODELS_DIR holds the F16 file.
+std::unique_ptr<axon::model::LlamaModel> load_or_skip(benchmark::State& state,
+                                                      const std::string& path, std::size_t max_seq,
+                                                      std::size_t max_ctx) {
+  auto model = axon::model::LlamaModel::load(path, {.max_seq = max_seq, .max_ctx = max_ctx});
   if (!model) {
     state.SkipWithError(model.error().message);
-    return;
+    return nullptr;
   }
-  std::vector<std::int32_t> tokens(seq);
-  const auto n_vocab = static_cast<std::int32_t>((*model)->config().n_vocab);
-  for (std::size_t i = 0; i < seq; ++i) {
+  return std::move(*model);
+}
+
+std::vector<std::int32_t> filler(std::size_t n, std::int32_t n_vocab) {
+  std::vector<std::int32_t> tokens(n);
+  for (std::size_t i = 0; i < n; ++i) {
     tokens[i] = static_cast<std::int32_t>((i * 7919) % static_cast<std::size_t>(n_vocab));
   }
+  return tokens;
+}
+
+void bm_prefill(benchmark::State& state, const std::string& path) {
+  const auto seq = static_cast<std::size_t>(state.range(0));
+  auto model = load_or_skip(state, path, seq, seq);
+  if (!model) {
+    return;
+  }
+  const auto tokens = filler(seq, static_cast<std::int32_t>(model->config().n_vocab));
+  auto cache = model->new_cache();
   for (auto _ : state) {
-    const auto logits = (*model)->forward(tokens);
+    cache.clear();
+    const auto logits = model->forward_prefill(cache, tokens);
     benchmark::DoNotOptimize(logits->data());
   }
   state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(seq));
-  state.counters["arena_MB"] =
-      static_cast<double>((*model)->arena_high_water()) / (1024.0 * 1024.0);
+  state.counters["arena_MB"] = static_cast<double>(model->arena_high_water()) / (1024.0 * 1024.0);
+}
+
+void bm_decode(benchmark::State& state, const std::string& path) {
+  const auto context = static_cast<std::size_t>(state.range(0));
+  const std::size_t chunk = std::min<std::size_t>(64, context);
+  auto model = load_or_skip(state, path, chunk, context);
+  if (!model) {
+    return;
+  }
+  if (model->max_ctx() < context) {
+    state.SkipWithError("context exceeds the model's training length");
+    return;
+  }
+  const auto tokens = filler(context, static_cast<std::int32_t>(model->config().n_vocab));
+  auto cache = model->new_cache();
+  for (std::size_t offset = 0; offset + 1 < context; offset += chunk) {
+    const std::size_t n = std::min(chunk, context - 1 - offset);
+    const auto logits = model->forward_prefill(cache, std::span(tokens).subspan(offset, n));
+    if (!logits) {
+      state.SkipWithError(logits.error().message);
+      return;
+    }
+  }
+  const std::size_t filled = cache.pos();
+  for (auto _ : state) {
+    cache.truncate(filled);
+    const auto logits = model->forward_one(cache, tokens.back());
+    benchmark::DoNotOptimize(logits->data());
+  }
+  state.SetItemsProcessed(state.iterations());
+  state.counters["cache_MB"] = static_cast<double>(cache.live_bytes()) / (1024.0 * 1024.0);
 }
 
 constexpr const char* kSyntheticPath = AXON_FIXTURE_DIR "/gguf/synthetic-2l.gguf";
@@ -46,16 +96,25 @@ std::string smollm2_path() {
 }
 
 const int kRegistered = [] {
-  benchmark::RegisterBenchmark("bm_forward_synthetic", bm_forward, std::string(kSyntheticPath))
-      ->Arg(1)
+  const std::string synthetic(kSyntheticPath);
+  benchmark::RegisterBenchmark("bm_prefill_synthetic", bm_prefill, synthetic)
+      ->Arg(32)
+      ->Arg(128)
+      ->Unit(benchmark::kMillisecond);
+  benchmark::RegisterBenchmark("bm_decode_synthetic", bm_decode, synthetic)
       ->Arg(32)
       ->Arg(128)
       ->Unit(benchmark::kMillisecond);
   if (const auto path = smollm2_path(); !path.empty()) {
-    benchmark::RegisterBenchmark("bm_forward_smollm2_f16", bm_forward, path)
-        ->Arg(1)
+    benchmark::RegisterBenchmark("bm_prefill_smollm2_f16", bm_prefill, path)
         ->Arg(32)
         ->Arg(128)
+        ->Unit(benchmark::kMillisecond)
+        ->MinTime(0.5);
+    benchmark::RegisterBenchmark("bm_decode_smollm2_f16", bm_decode, path)
+        ->Arg(32)
+        ->Arg(512)
+        ->Arg(2048)
         ->Unit(benchmark::kMillisecond)
         ->MinTime(0.5);
   }
