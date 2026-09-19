@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs the same gates as the CI workflow on the local machine: format check, every preset's
-# build and tests, clang-tidy, and a benchmark smoke run. Exits non-zero on the first failure.
+# Runs every gate on the local machine: format check, every preset's build and tests,
+# clang-tidy, integration tests when models are present, and a benchmark smoke run. Exits
+# non-zero on the first failure.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
