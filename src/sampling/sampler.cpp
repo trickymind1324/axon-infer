@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 namespace axon {
@@ -67,14 +68,14 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
   const SamplerConfig& c = s.config;
   const auto n = static_cast<std::size_t>(s.n_vocab);
   AXON_CHECK(logits.size() == n, "Sampler: expected {} logits, found {}", n, logits.size());
-  std::copy(logits.begin(), logits.end(), s.logits.begin());
+  std::ranges::copy(logits, s.logits.begin());
 
   // Repetition penalty over the last repeat_last_n tokens, once per distinct token.
   if (c.repeat_penalty != 1.0F && c.repeat_last_n > 0 && !recent.empty()) {
     const std::size_t window = std::min(recent.size(), static_cast<std::size_t>(c.repeat_last_n));
     const auto tail = recent.last(window);
     for (const std::int32_t id : tail) {
-      if (id < 0 || static_cast<std::size_t>(id) >= n) {
+      if (id < 0 || std::cmp_greater_equal(id, n)) {
         continue;
       }
       const auto i = static_cast<std::size_t>(id);
@@ -86,7 +87,7 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
       logit = logit > 0.0F ? logit / c.repeat_penalty : logit * c.repeat_penalty;
     }
     for (const std::int32_t id : tail) {
-      if (id >= 0 && static_cast<std::size_t>(id) < n) {
+      if (id >= 0 && std::cmp_less(id, n)) {
         s.touched[static_cast<std::size_t>(id)] = 0;
       }
     }
@@ -104,20 +105,20 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
     return s.logits[static_cast<std::size_t>(a)] > s.logits[static_cast<std::size_t>(b)];
   };
   std::size_t kept = n;
-  if (c.top_k > 0 && static_cast<std::size_t>(c.top_k) < n) {
+  if (c.top_k > 0 && std::cmp_less(c.top_k, n)) {
     kept = static_cast<std::size_t>(c.top_k);
-    std::partial_sort(s.order.begin(), s.order.begin() + static_cast<std::ptrdiff_t>(kept),
-                      s.order.end(), by_logit);
+    std::ranges::partial_sort(s.order, s.order.begin() + static_cast<std::ptrdiff_t>(kept),
+                              by_logit);
   } else {
-    std::sort(s.order.begin(), s.order.end(), by_logit);
+    std::ranges::sort(s.order, by_logit);
   }
 
   // Temperature and softmax over the kept candidates, in double for the cumulative sums.
-  const double max_logit = static_cast<double>(s.logits[static_cast<std::size_t>(s.order[0])]);
+  const auto max_logit = static_cast<double>(s.logits[static_cast<std::size_t>(s.order[0])]);
   const auto temperature = static_cast<double>(c.temperature);
   double sum = 0.0;
   for (std::size_t i = 0; i < kept; ++i) {
-    const double logit = static_cast<double>(s.logits[static_cast<std::size_t>(s.order[i])]);
+    const auto logit = static_cast<double>(s.logits[static_cast<std::size_t>(s.order[i])]);
     s.probs[i] = std::exp((logit - max_logit) / temperature);
     sum += s.probs[i];
   }

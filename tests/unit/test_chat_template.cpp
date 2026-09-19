@@ -35,15 +35,18 @@ struct Conversation {
 
 std::vector<Conversation> conversations() {
   return {
-      {{{"system", "You are a terse assistant."}, {"user", "Name three primes."}}, true},
-      {{{"user", "Hello there!"},
-        {"assistant", "Hi. How can I help?"},
-        {"user", "What's 2 + 2?"},
-        {"assistant", "4."},
-        {"user", "And times 3?  "},
-        {"assistant", "12."}},
-       false},
-      {{{"user", "  Übersetze: naïve café\n\nzweite Zeile "}}, true},
+      {.messages = {{.role = "system", .content = "You are a terse assistant."},
+                    {.role = "user", .content = "Name three primes."}},
+       .add_generation_prompt = true},
+      {.messages = {{.role = "user", .content = "Hello there!"},
+                    {.role = "assistant", .content = "Hi. How can I help?"},
+                    {.role = "user", .content = "What's 2 + 2?"},
+                    {.role = "assistant", .content = "4."},
+                    {.role = "user", .content = "And times 3?  "},
+                    {.role = "assistant", .content = "12."}},
+       .add_generation_prompt = false},
+      {.messages = {{.role = "user", .content = "  Übersetze: naïve café\n\nzweite Zeile "}},
+       .add_generation_prompt = true},
   };
 }
 
@@ -98,14 +101,15 @@ TEST_CASE("templates from tokenizer-only GGUF files parse and detect their famil
     INFO(name);
     CHECK(tmpl.has_jinja());
     CHECK(tmpl.fallback() == (std::string(name) == "smollm2" ? Family::ChatML : Family::Zephyr));
-    const std::vector<Message> messages{{"user", "Hi"}};
+    const std::vector<Message> messages{{.role = "user", .content = "Hi"}};
     const auto rendered = tmpl.render(messages, true);
     CHECK_THAT(rendered, ContainsSubstring("Hi"));
   }
 }
 
 TEST_CASE("fallback families render their shapes", "[chat][template]") {
-  const std::vector<Message> messages{{"system", "Be brief."}, {"user", "Hi"}};
+  const std::vector<Message> messages{{.role = "system", .content = "Be brief."},
+                                      {.role = "user", .content = "Hi"}};
   const auto chatml = ChatTemplate::from_source("", Family::ChatML, "<s>", "</s>");
   CHECK(chatml.source() == "chatml");
   CHECK(chatml.render(messages, true) ==
@@ -130,7 +134,7 @@ TEST_CASE("an unsupported template falls back and says which family", "[chat][te
       ChatTemplate::from_source("{% macro m() %}x{% endmacro %}", Family::ChatML, "<s>", "</s>");
   CHECK_FALSE(tmpl.has_jinja());
   CHECK(tmpl.source() == "chatml");
-  const std::vector<Message> messages{{"user", "Hi"}};
+  const std::vector<Message> messages{{.role = "user", .content = "Hi"}};
   CHECK(tmpl.render(messages, true) == "<|im_start|>user\nHi<|im_end|>\n<|im_start|>assistant\n");
 
   // A runtime failure falls back for that render only.

@@ -66,7 +66,7 @@ ChatTemplate ChatTemplate::from_source(std::string_view source, Family fallback,
                 family_name(fallback));
     }
   }
-  return ChatTemplate(std::move(tmpl), fallback, std::move(bos), std::move(eos));
+  return {std::move(tmpl), fallback, std::move(bos), std::move(eos)};
 }
 
 ChatTemplate ChatTemplate::from_tokenizer(const Tokenizer& tokenizer) {

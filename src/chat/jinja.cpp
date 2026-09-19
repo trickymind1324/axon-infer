@@ -6,6 +6,8 @@
 #include <cctype>
 #include <ctime>
 #include <optional>
+#include <ranges>
+#include <utility>
 
 namespace axon::chat {
 
@@ -117,7 +119,7 @@ bool Value::equals(const Value& other) const {
   return false;
 }
 
-std::string Value::kind_name() const {
+std::string_view Value::kind_name() const {
   switch (kind_) {
   case Kind::Undefined:
     return "undefined";
@@ -143,7 +145,7 @@ struct Expr;
 using ExprPtr = std::unique_ptr<Expr>;
 
 struct Expr {
-  enum class Kind {
+  enum class Kind : std::uint8_t {
     Literal,
     Name,
     Attr,   // a.b or a['b']: object in `left`, key in `name`
@@ -173,7 +175,7 @@ struct Expr {
 };
 
 struct Node {
-  enum class Kind { Text, Output, If, For, Set };
+  enum class Kind : std::uint8_t { Text, Output, If, For, Set };
   Kind kind = Kind::Text;
   std::string text;
   ExprPtr expr;
@@ -191,7 +193,7 @@ using Body = std::vector<std::unique_ptr<Node>>;
 // --- template lexer -----------------------------------------------------------------------
 
 struct Chunk {
-  enum class Kind { Text, Output, Block, Comment };
+  enum class Kind : std::uint8_t { Text, Output, Block, Comment };
   Kind kind;
   std::string content;
   bool strip_before = false;  // opener had `-`
@@ -331,7 +333,7 @@ Expected<std::vector<Chunk>> lex_template(std::string_view src) {
 // --- expression lexer ---------------------------------------------------------------------
 
 struct Token {
-  enum class Kind { Name, String, Int, Op, End };
+  enum class Kind : std::uint8_t { Name, String, Int, Op, End };
   Kind kind = Kind::End;
   std::string text;
 };
@@ -411,7 +413,7 @@ Expected<std::vector<Token>> lex_expression(std::string_view src, std::size_t li
     return make_error(ErrorCode::Parse,
                       fmt::format("jinja: line {}: unexpected character '{}'", line, c));
   }
-  out.push_back({.kind = Token::Kind::End});
+  out.push_back({.kind = Token::Kind::End, .text = {}});
   return out;
 }
 
@@ -938,8 +940,8 @@ private:
   }
 
   const Value* lookup(std::string_view name) const {
-    for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
-      for (const auto& [k, v] : *it) {
+    for (const auto& scope : std::ranges::reverse_view(scopes_)) {
+      for (const auto& [k, v] : scope) {
         if (k == name) {
           return &v;
         }
@@ -1087,7 +1089,7 @@ private:
         if (i < 0) {
           i += static_cast<std::int64_t>(items.size());
         }
-        if (i < 0 || i >= static_cast<std::int64_t>(items.size())) {
+        if (i < 0 || std::cmp_greater_equal(i, items.size())) {
           return Value{};
         }
         return items[static_cast<std::size_t>(i)];

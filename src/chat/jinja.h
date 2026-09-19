@@ -30,7 +30,7 @@ using Map = std::vector<std::pair<std::string, Value>>;  // insertion ordered
 
 class Value {
 public:
-  enum class Kind { Undefined, None, Bool, Int, String, List, Map };
+  enum class Kind : std::uint8_t { Undefined, None, Bool, Int, String, List, Map };
 
   Value() = default;
   static Value none();
@@ -49,7 +49,7 @@ public:
   [[nodiscard]] const Map& as_map() const { return map_; }
   [[nodiscard]] const Value* get(std::string_view key) const;  // map lookup, nullptr if absent
   [[nodiscard]] bool equals(const Value& other) const;
-  [[nodiscard]] std::string kind_name() const;
+  [[nodiscard]] std::string_view kind_name() const;
 
 private:
   Kind kind_ = Kind::Undefined;

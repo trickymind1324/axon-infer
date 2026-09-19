@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 namespace axon::engine {
 
@@ -112,7 +113,7 @@ Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& op
   generated.reserve(static_cast<std::size_t>(std::max(opts.max_tokens, 0)));
   StreamingDecoder decoder(tokenizer);
   const auto t_decode = std::chrono::steady_clock::now();
-  while (static_cast<int>(generated.size()) < opts.max_tokens) {
+  while (std::cmp_less(generated.size(), opts.max_tokens)) {
     if (is_stop(next)) {
       stats_.stopped_on_token = true;
       break;
@@ -122,7 +123,7 @@ Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& op
     if (!piece.empty() && on_text) {
       on_text(piece);
     }
-    if (static_cast<int>(generated.size()) >= opts.max_tokens) {
+    if (std::cmp_greater_equal(generated.size(), opts.max_tokens)) {
       break;
     }
     if (cache_.pos() >= cache_.max_ctx()) {
