@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -23,6 +24,7 @@ namespace {
 constexpr int kPrompts = 10;
 constexpr int kGreedyPrompts = 5;
 constexpr std::size_t kMaxSeq = 64;
+constexpr std::size_t kMaxCtx = 128;
 
 std::unique_ptr<axon::model::LlamaModel> load_smollm2() {
   const char* env = std::getenv("AXON_MODELS_DIR");
@@ -33,7 +35,7 @@ std::unique_ptr<axon::model::LlamaModel> load_smollm2() {
   if (!std::filesystem::exists(path)) {
     SKIP("model file not present: " << path.string());
   }
-  auto model = axon::model::LlamaModel::load(path, kMaxSeq);
+  auto model = axon::model::LlamaModel::load(path, {.max_seq = kMaxSeq, .max_ctx = kMaxCtx});
   if (!model) {
     FAIL(model.error().message);
   }
@@ -49,13 +51,16 @@ axon::AxtTensor fixture(const std::string& name) {
   return std::move(*tensor);
 }
 
-std::vector<float> forward(axon::model::LlamaModel& model,
-                           const std::vector<std::int32_t>& tokens) {
-  const auto logits = model.forward(tokens);
+std::vector<float> forward_vector(const axon::Expected<std::span<const float>>& logits) {
   if (!logits) {
     FAIL(logits.error().message);
   }
   return {logits->begin(), logits->end()};
+}
+
+std::vector<float> forward(axon::model::LlamaModel& model,
+                           const std::vector<std::int32_t>& tokens) {
+  return forward_vector(model.forward(tokens));
 }
 
 std::int32_t argmax(const float* row, std::size_t n) {
@@ -98,7 +103,7 @@ TEST_CASE("SmolLM2 last-position logits are within 1e-3 of Hugging Face", "[inte
   }
 }
 
-TEST_CASE("SmolLM2 greedy continuations match Hugging Face", "[integration][model]") {
+TEST_CASE("SmolLM2 cached greedy continuations match Hugging Face", "[integration][model]") {
   auto model = load_smollm2();
   const std::size_t n_vocab = model->config().n_vocab;
   std::ifstream greedy(std::filesystem::path(AXON_FIXTURE_DIR) / "model/smollm2.greedy.txt");
@@ -112,16 +117,39 @@ TEST_CASE("SmolLM2 greedy continuations match Hugging Face", "[integration][mode
       expected.push_back(id);
     }
     REQUIRE(expected.size() == 20);
-    auto tokens = fixture("smollm2." + std::to_string(i) + ".tokens").as_i32();
+    const auto tokens = fixture("smollm2." + std::to_string(i) + ".tokens").as_i32();
+    auto cache = model->new_cache();
+    auto logits = model->forward_prefill(cache, tokens);
     std::vector<std::int32_t> generated;
     for (std::size_t step = 0; step < expected.size(); ++step) {
-      const auto logits = forward(*model, tokens);
-      const auto next = argmax(logits.data() + (tokens.size() - 1) * n_vocab, n_vocab);
+      if (!logits) {
+        FAIL(logits.error().message);
+      }
+      const auto next = argmax(logits->data() + (logits->size() / n_vocab - 1) * n_vocab, n_vocab);
       generated.push_back(next);
-      tokens.push_back(next);
+      logits = model->forward_one(cache, next);
     }
     INFO("prompt " << i);
     CHECK(generated == expected);
+  }
+}
+
+TEST_CASE("SmolLM2 cached decoding is bit-identical to the cache-free forward",
+          "[integration][model]") {
+  auto model = load_smollm2();
+  const std::size_t n_vocab = model->config().n_vocab;
+  auto tokens = fixture("smollm2.0.tokens").as_i32();
+  auto cache = model->new_cache();
+  const auto prefill = forward_vector(model->forward_prefill(cache, tokens));
+  CHECK(prefill == forward(*model, tokens));
+  for (int step = 0; step < 8; ++step) {
+    const auto next = argmax(prefill.data() + (tokens.size() - 1) * n_vocab, n_vocab);
+    tokens.push_back(step == 0 ? next : tokens.back() + 1);
+    const auto cached = forward_vector(model->forward_one(cache, tokens.back()));
+    const auto full = forward(*model, tokens);
+    const std::vector<float> last(full.end() - static_cast<std::ptrdiff_t>(n_vocab), full.end());
+    INFO("step " << step);
+    CHECK(cached == last);
   }
 }
 
