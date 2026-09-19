@@ -56,8 +56,23 @@ cmake --build --preset release
 ./build/release/apps/axon/axon --version
 
 scripts/download_models.sh                     # SmolLM2-135M in F16, Q8_0 and Q4_0, checksums verified
+./build/release/apps/axon/axon chat -m models/SmolLM2-135M-Instruct-f16.gguf
 ./build/release/apps/axon-dump/axon-dump models/SmolLM2-135M-Instruct-Q8_0.gguf --no-arrays
 ```
+
+`axon chat` holds a multi-turn conversation using the model's own chat template. Each turn reuses the cached prefix of the conversation, so a follow-up question costs only its new tokens:
+
+```
+$ ./build/release/apps/axon/axon chat -m models/SmolLM2-135M-Instruct-f16.gguf --temp 0 --stats
+> What is the capital of France?
+The capital of France is Paris. It's a city that has been a beacon for art, culture, and innovation since ancient times.
+[prompt 37 tokens (0 reused), first token in 9.13 s, decode 40 tokens in 9.65 s (4.15 tok/s), cache 76 positions (3.3 MB of 90.0 MB), peak rss 273 MB, seed 15111573243193277517]
+> And of Germany?
+Germany also has its own capital city, Berlin. However, it's not the same as Paris in France or London in England.
+[prompt 92 tokens (76 reused), first token in 3.92 s, decode 40 tokens in 9.78 s (4.09 tok/s), cache 131 positions (5.8 MB of 90.0 MB), peak rss 273 MB, seed 15111573243193277517]
+```
+
+`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. Only SmolLM2 runs today because the other downloaded models are Q4_0, which has no kernels yet.
 
 `axon-dump` prints the header, every metadata key, the tensor table and a per-dtype byte summary. It reads any GGUF v3 file, including K-quant models it cannot run, and `--json` gives the same data as a document:
 
@@ -93,10 +108,18 @@ $ ./build/release/apps/axon/axon generate -m models/SmolLM2-135M-Instruct-f16.gg
 model: Smollm2 135M 8k Lc100K Mix1 Ep2 (llama layers 30 embd 576 heads 9 kv 3 ff 1536 vocab 49152 ctx 8192 rope normal 100000 tied)
 prompt: 5 tokens
 The capital of France is Paris. Paris is the largest city in France and the capital of the French department of the Espace
-prefill 5 tokens in 1.28 s (3.9 tok/s), decode 20 tokens in 4.70 s (4.26 tok/s), load 0.02 s, arena 1.0 MB, cache 1.1 MB of 90.0 MB
+prompt 5 tokens (0 reused), first token in 1.24 s, decode 20 tokens in 4.65 s (4.30 tok/s), cache 24 positions (1.1 MB of 90.0 MB), peak rss 273 MB, seed 15111573250111174978
 ```
 
-`--ctx` sets the cache length (default 2048, clamped to the model's training context) and `--no-cache` runs the cache-free loop that recomputes the whole sequence each step, which is also the path that can dump activations.
+`generate` is greedy by default so its output matches Hugging Face, and it takes the same sampling flags as `chat`. `--ctx` sets the cache length (default 2048, clamped to the model's training context) and `--no-cache` runs the cache-free loop that recomputes the whole sequence each step, which is also the path that can dump activations.
+
+### Sampling and chat
+
+The sampler runs the stages in llama.cpp's order: repetition penalty over a window of recent tokens, temperature, top-k, top-p, min-p, then one draw. Temperature zero is greedy and skips the rest. The random generator is written in the repo rather than taken from the standard library, because the standard distributions are not bit-specified across implementations and a seeded run should reproduce the same tokens on every platform. Sampling allocates nothing after construction.
+
+Chat prompts come from the model's own template, read from the GGUF metadata and rendered by a small Jinja interpreter. It covers what the SmolLM2, TinyLlama, Llama 3 and Qwen2 templates use, which is loops, conditionals, `set`, attribute and index access, slicing, `in`, the tests `defined` and `none`, the filters `trim` and `length`, and Jinja's whitespace control with the same environment defaults Hugging Face uses. Twelve renders across four families match `apply_chat_template` byte for byte. Anything outside the subset falls back to a hard-coded format chosen from the vocabulary's special tokens, with a log line saying why.
+
+The engine keeps the conversation's tokens alongside the cache. When a new prompt arrives it finds the longest common prefix with what the cache holds, truncates to it, and prefills only the rest. A chat template that re-renders the whole transcript every turn therefore costs one turn of prefill.
 
 ### Forward pass
 
@@ -162,9 +185,11 @@ Tests that need real model files are opt-in: run `scripts/download_models.sh`, t
 
 Tokenizer fixtures are tokenizer-only GGUF files (metadata without tensors) plus the reference ids from Hugging Face, so the SmolLM2 and TinyLlama tests need no download. Llama 3.2 and Qwen2.5 are checked by the opt-in integration tests. `bench_tokenizer` reports encode throughput.
 
+Chat template fixtures are the Hugging Face `apply_chat_template` output for three conversations per family, produced by `tests/reference/gen_chat_fixtures.py` from the tokenizers alone, with each family's template source saved next to them so the unit test needs no model files.
+
 Kernel fixtures are `.axt` files (a 4-byte magic, dims, dtype, raw data) written by `tests/reference/gen_kernel_fixtures.py`. To add a kernel: declare it in `src/kernels/kernels.h` and `src/kernels/ref/ref.h`, implement the scalar version under `src/kernels/ref/`, register it in the table in `src/kernels/kernels.cpp`, add its reference to the generator and regenerate, then write a fixture test plus at least one property test under `tests/unit/`. Optimized variants come later as separate tables checked against `scalar_kernels()`.
 
-Model fixtures come from `tests/reference/gen_model_fixtures.py`: the synthetic logits by default, and the SmolLM2 references with `--smollm2 models/SmolLM2-135M-Instruct-f16.gguf` (needs `torch`, `transformers` and `accelerate` in the venv). The committed SmolLM2 set is about 2 MB. The full per-position logits land in the gitignored `tests/reference/local/` and are checked by the integration tests when `AXON_LOCAL_FIXTURES` points there. The SmolLM2 integration tests take about three minutes on the scalar path.
+Model fixtures come from `tests/reference/gen_model_fixtures.py`: the synthetic logits by default, and the SmolLM2 references with `--smollm2 models/SmolLM2-135M-Instruct-f16.gguf` (needs `torch`, `transformers` and `accelerate` in the venv). The committed SmolLM2 set is about 2 MB. The full per-position logits land in the gitignored `tests/reference/local/` and are checked by the integration tests when `AXON_LOCAL_FIXTURES` points there. The SmolLM2 integration tests take about four minutes on the scalar path.
 
 The GGUF parser is fuzzed two ways: a deterministic corruption replay runs inside the normal unit tests under every preset, and a libFuzzer target builds with the `fuzz` preset on Linux clang.
 
