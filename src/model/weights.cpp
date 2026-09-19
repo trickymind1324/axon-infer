@@ -38,9 +38,8 @@ Expected<Tensor> bind_tensor(const GGUFFile& file, const std::string& name, Kind
     break;
   case Kind::Matmul:
     if (info->dtype == DType::Q8_0 || info->dtype == DType::Q4_0) {
-      return make_error(
-          ErrorCode::Unsupported,
-          fmt::format("{}: dtype {} has no kernels yet", name, dtype_name(info->dtype)));
+      return make_error(ErrorCode::Unsupported, fmt::format("{}: dtype {} has no kernels yet", name,
+                                                            dtype_name(info->dtype)));
     }
     if (info->dtype != DType::F32 && info->dtype != DType::F16 && info->dtype != DType::BF16) {
       return make_error(ErrorCode::Unsupported,
