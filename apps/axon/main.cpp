@@ -140,8 +140,12 @@ struct SamplingCli {
   }
 };
 
-void add_sampling_options(CLI::App& cmd, SamplingCli& s, float default_temperature) {
+// generate defaults to pure greedy so its output matches Hugging Face token for token. chat
+// defaults to the usual sampling settings.
+void add_sampling_options(CLI::App& cmd, SamplingCli& s, float default_temperature,
+                          float default_repeat_penalty) {
   s.temperature = default_temperature;
+  s.repeat_penalty = default_repeat_penalty;
   cmd.add_option("--temp", s.temperature, "sampling temperature, 0 is greedy")
       ->default_val(default_temperature);
   cmd.add_option("--top-k", s.top_k, "keep the k most likely tokens, 0 disables")->default_val(40);
@@ -149,7 +153,7 @@ void add_sampling_options(CLI::App& cmd, SamplingCli& s, float default_temperatu
   cmd.add_option("--min-p", s.min_p, "drop tokens below this fraction of the best, 0 disables")
       ->default_val(0.05F);
   cmd.add_option("--repeat-penalty", s.repeat_penalty, "penalty for recent tokens, 1 disables")
-      ->default_val(1.1F);
+      ->default_val(default_repeat_penalty);
   cmd.add_option("--repeat-last-n", s.repeat_last_n, "how many recent tokens the penalty sees")
       ->default_val(64);
   cmd.add_option("--seed", s.seed, "random seed, 0 picks one and reports it");
@@ -430,7 +434,7 @@ int run(int argc, char** argv) {
       "write this layer's activations from the first forward pass (implies --no-cache)");
   gen->add_option("--dump-dir", generate.dump_dir, "directory for --dump-layer")
       ->default_str("dump-axon");
-  add_sampling_options(*gen, generate.sampling, 0.0F);
+  add_sampling_options(*gen, generate.sampling, 0.0F, 1.0F);
 
   ChatCli chat;
   auto* ch = app.add_subcommand("chat", "multi-turn conversation using the model's chat template");
@@ -440,7 +444,7 @@ int run(int argc, char** argv) {
   ch->add_option("--max-seq", chat.max_seq, "tokens per forward call")->default_val(256);
   ch->add_option("--max-tokens", chat.max_tokens, "longest reply in tokens")->default_val(256);
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
-  add_sampling_options(*ch, chat.sampling, 0.8F);
+  add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 
   app.require_subcommand(0, 1);
   CLI11_PARSE(app, argc, argv);
