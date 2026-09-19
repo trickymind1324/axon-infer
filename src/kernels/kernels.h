@@ -61,6 +61,14 @@ struct KernelTable {
   void (*attention)(const float* q, const float* k, const float* v, float* out, float* scores,
                     std::size_t seq, std::size_t n_head, std::size_t n_head_kv,
                     std::size_t head_dim, float scale);
+  // Attention over a key/value cache. Queries sit at absolute positions n_past .. n_past + n_q - 1
+  // and attend causally over cached positions 0 .. n_past + n_q - 1, whose keys and values the
+  // caller has already written. With n_past == 0 and n_q == seq this is `attention`.
+  //   q: [n_q][n_head][head_dim]   k_cache, v_cache: [n_past + n_q][n_head_kv][head_dim]
+  //   out: [n_q][n_head][head_dim]   scores: scratch of at least n_q * (n_past + n_q) floats
+  void (*attention_kv)(const float* q, const float* k_cache, const float* v_cache, float* out,
+                       float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                       std::size_t n_head_kv, std::size_t head_dim, float scale);
 };
 
 // The table in use. Scalar until runtime dispatch lands.

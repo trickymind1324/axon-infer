@@ -19,6 +19,7 @@ constexpr KernelTable kScalarTable{
     .silu_mul = ref::silu_mul,
     .embedding_row = ref::embedding_row,
     .attention = ref::attention,
+    .attention_kv = ref::attention_kv,
 };
 
 }  // namespace

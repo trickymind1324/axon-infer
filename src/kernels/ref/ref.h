@@ -29,5 +29,8 @@ void embedding_row(DType type, const void* table, std::size_t n, std::int64_t in
 void attention(const float* q, const float* k, const float* v, float* out, float* scores,
                std::size_t seq, std::size_t n_head, std::size_t n_head_kv, std::size_t head_dim,
                float scale);
+void attention_kv(const float* q, const float* k_cache, const float* v_cache, float* out,
+                  float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                  std::size_t n_head_kv, std::size_t head_dim, float scale);
 
 }  // namespace axon::kernels::ref

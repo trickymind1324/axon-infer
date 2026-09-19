@@ -131,3 +131,55 @@ TEST_CASE("grouped-query attention equals multi-head attention on repeated kv he
                 s.n_head, s.n_head, s.head_dim, inv_sqrt(s.head_dim));
   CHECK(out_gqa == out_mha);
 }
+
+TEST_CASE("attention_kv with nothing cached equals full attention", "[kernels][attention]") {
+  for (const auto& s : kShapes) {
+    const std::string base = s.name;
+    const auto q = axon::test::load_axt(base + ".q").as_f32();
+    const auto key = axon::test::load_axt(base + ".k").as_f32();
+    const auto v = axon::test::load_axt(base + ".v").as_f32();
+    std::vector<float> full(q.size());
+    std::vector<float> cached(q.size());
+    std::vector<float> scores(s.seq * s.seq);
+    k().attention(q.data(), key.data(), v.data(), full.data(), scores.data(), s.seq, s.n_head,
+                  s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+    k().attention_kv(q.data(), key.data(), v.data(), cached.data(), scores.data(), s.seq, 0,
+                     s.n_head, s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+    INFO(s.name);
+    CHECK(cached == full);
+  }
+}
+
+TEST_CASE("attention_kv over a growing cache is bit-identical to the full pass",
+          "[kernels][attention]") {
+  const Shape& s = kShapes[0];  // seq 8
+  const std::string base = s.name;
+  const auto q = axon::test::load_axt(base + ".q").as_f32();
+  const auto key = axon::test::load_axt(base + ".k").as_f32();
+  const auto v = axon::test::load_axt(base + ".v").as_f32();
+  const std::size_t q_row = s.n_head * s.head_dim;
+  std::vector<float> full(q.size());
+  std::vector<float> scores(s.seq * s.seq);
+  k().attention(q.data(), key.data(), v.data(), full.data(), scores.data(), s.seq, s.n_head,
+                s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+
+  SECTION("prefill five positions, then one at a time") {
+    std::vector<float> out(q.size());
+    k().attention_kv(q.data(), key.data(), v.data(), out.data(), scores.data(), 5, 0, s.n_head,
+                     s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+    for (std::size_t pos = 5; pos < s.seq; ++pos) {
+      k().attention_kv(q.data() + pos * q_row, key.data(), v.data(), out.data() + pos * q_row,
+                       scores.data(), 1, pos, s.n_head, s.n_head_kv, s.head_dim,
+                       inv_sqrt(s.head_dim));
+    }
+    CHECK(out == full);
+  }
+  SECTION("two prefill chunks of three and five") {
+    std::vector<float> out(q.size());
+    k().attention_kv(q.data(), key.data(), v.data(), out.data(), scores.data(), 3, 0, s.n_head,
+                     s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+    k().attention_kv(q.data() + 3 * q_row, key.data(), v.data(), out.data() + 3 * q_row,
+                     scores.data(), 5, 3, s.n_head, s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+    CHECK(out == full);
+  }
+}
