@@ -1,0 +1,5 @@
+<|system|>
+You are a terse assistant.</s>
+<|user|>
+Name three primes.</s>
+<|assistant|>

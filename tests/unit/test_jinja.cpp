@@ -63,6 +63,9 @@ TEST_CASE("text, output and literals", "[chat][jinja]") {
   CHECK(render("a{{ 'b' }}c") == "abc");
   CHECK(render("{{ \"q\\\"uote\\n\" }}") == "q\"uote\n");
   CHECK(render("{{ 1 + 2 }}") == "3");
+  CHECK(render("{{ 5 - 2 - 1 }}/{{ -3 }}/{{ xs[n - 1] }}",
+               {{"xs", Value::list({Value::string("a"), Value::string("b")})},
+                {"n", Value::integer(2)}}) == "2/-3/b");
   CHECK(render("{{ true }}/{{ false }}/{{ none }}/{{ missing }}") == "True/False//");
   CHECK(render("{{ 'a' + 'b' + 'c' }}") == "abc");
 }

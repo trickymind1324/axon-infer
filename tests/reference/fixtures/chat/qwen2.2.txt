@@ -1,0 +1,7 @@
+<|im_start|>system
+You are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>
+<|im_start|>user
+  Übersetze: naïve café
+
+zweite Zeile <|im_end|>
+<|im_start|>assistant

@@ -150,6 +150,7 @@ struct Expr {
     Index,  // a[expr]
     Slice,  // a[start:stop]
     Add,
+    Sub,
     Eq,
     Ne,
     And,
@@ -354,10 +355,8 @@ Expected<std::vector<Token>> lex_expression(std::string_view src, std::size_t li
       i = j;
       continue;
     }
-    if (std::isdigit(static_cast<unsigned char>(c)) != 0 ||
-        (c == '-' && i + 1 < src.size() &&
-         std::isdigit(static_cast<unsigned char>(src[i + 1])) != 0)) {
-      std::size_t j = i + 1;
+    if (std::isdigit(static_cast<unsigned char>(c)) != 0) {
+      std::size_t j = i;
       while (j < src.size() && std::isdigit(static_cast<unsigned char>(src[j])) != 0) {
         ++j;
       }
@@ -404,7 +403,7 @@ Expected<std::vector<Token>> lex_expression(std::string_view src, std::size_t li
     if (matched) {
       continue;
     }
-    if (std::string_view("|.[]():,+=").find(c) != std::string_view::npos) {
+    if (std::string_view("|.[]():,+-=").find(c) != std::string_view::npos) {
       out.push_back({.kind = Token::Kind::Op, .text = std::string(1, c)});
       ++i;
       continue;
@@ -562,12 +561,13 @@ private:
     if (!left) {
       return left;
     }
-    while (accept_op("+")) {
+    while (accept_op("+") || accept_op("-")) {
+      const bool add = tokens_[pos_ - 1].text == "+";
       auto right = parse_postfix();
       if (!right) {
         return right;
       }
-      left = binary(Expr::Kind::Add, std::move(*left), std::move(*right));
+      left = binary(add ? Expr::Kind::Add : Expr::Kind::Sub, std::move(*left), std::move(*right));
     }
     return left;
   }
@@ -699,6 +699,15 @@ private:
       }
       return e;
     case Token::Kind::Op:
+      if (t.text == "-") {
+        auto operand = parse_postfix();
+        if (!operand) {
+          return operand;
+        }
+        auto zero = std::make_unique<Expr>();
+        zero->literal = Value::integer(0);
+        return binary(Expr::Kind::Sub, std::move(zero), std::move(*operand));
+      }
       if (t.text == "(") {
         auto inner = parse_or();
         if (!inner) {
@@ -1121,7 +1130,8 @@ private:
       stop = std::clamp<std::int64_t>(stop, start, n);
       return Value::list(List(items.begin() + start, items.begin() + stop));
     }
-    case Expr::Kind::Add: {
+    case Expr::Kind::Add:
+    case Expr::Kind::Sub: {
       auto l = eval(*e.left);
       if (!l) {
         return l;
@@ -1130,13 +1140,15 @@ private:
       if (!r) {
         return r;
       }
-      if (l->kind() == Value::Kind::String && r->kind() == Value::Kind::String) {
+      const bool add = e.kind == Expr::Kind::Add;
+      if (add && l->kind() == Value::Kind::String && r->kind() == Value::Kind::String) {
         return Value::string(l->as_string() + r->as_string());
       }
       if (l->kind() == Value::Kind::Int && r->kind() == Value::Kind::Int) {
-        return Value::integer(l->as_int() + r->as_int());
+        return Value::integer(add ? l->as_int() + r->as_int() : l->as_int() - r->as_int());
       }
-      return fail(fmt::format("cannot add a {} and a {}", l->kind_name(), r->kind_name()));
+      return fail(fmt::format("cannot {} a {} and a {}", add ? "add" : "subtract", l->kind_name(),
+                              r->kind_name()));
     }
     case Expr::Kind::Eq:
     case Expr::Kind::Ne: {

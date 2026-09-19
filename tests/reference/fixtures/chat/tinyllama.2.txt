@@ -1,0 +1,5 @@
+<|user|>
+  Übersetze: naïve café
+
+zweite Zeile </s>
+<|assistant|>

@@ -1,0 +1,7 @@
+<|im_start|>system
+You are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>
+<|im_start|>user
+  Übersetze: naïve café
+
+zweite Zeile <|im_end|>
+<|im_start|>assistant

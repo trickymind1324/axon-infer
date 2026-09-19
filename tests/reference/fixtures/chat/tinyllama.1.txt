@@ -1,0 +1,12 @@
+<|user|>
+Hello there!</s>
+<|assistant|>
+Hi. How can I help?</s>
+<|user|>
+What's 2 + 2?</s>
+<|assistant|>
+4.</s>
+<|user|>
+And times 3?  </s>
+<|assistant|>
+12.</s>

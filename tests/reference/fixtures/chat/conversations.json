@@ -1,0 +1,53 @@
+[
+ {
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a terse assistant."
+   },
+   {
+    "role": "user",
+    "content": "Name three primes."
+   }
+  ],
+  "add_generation_prompt": true
+ },
+ {
+  "messages": [
+   {
+    "role": "user",
+    "content": "Hello there!"
+   },
+   {
+    "role": "assistant",
+    "content": "Hi. How can I help?"
+   },
+   {
+    "role": "user",
+    "content": "What's 2 + 2?"
+   },
+   {
+    "role": "assistant",
+    "content": "4."
+   },
+   {
+    "role": "user",
+    "content": "And times 3?  "
+   },
+   {
+    "role": "assistant",
+    "content": "12."
+   }
+  ],
+  "add_generation_prompt": false
+ },
+ {
+  "messages": [
+   {
+    "role": "user",
+    "content": "  Übersetze: naïve café\n\nzweite Zeile "
+   }
+  ],
+  "add_generation_prompt": true
+ }
+]
