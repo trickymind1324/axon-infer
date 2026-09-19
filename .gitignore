@@ -9,9 +9,10 @@ compile_commands.json
 docs/
 PRD-inference-engine.md
 
-# models and data
+# models and data (the small test fixtures under tests/reference/fixtures are the exception)
 models/
 *.gguf
+!tests/reference/fixtures/**/*.gguf
 *.safetensors
 
 # python
