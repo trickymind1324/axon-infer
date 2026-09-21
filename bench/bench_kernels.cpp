@@ -121,11 +121,12 @@ void bm_matmul_q4_0(benchmark::State& state) {
   const auto n_in = static_cast<std::size_t>(state.range(1));
   const bool int_dot = state.range(2) != 0;
   std::vector<axon::BlockQ4_0> wq(n_out * n_in / 32);
-  std::mt19937 rng(3);
+  std::uint32_t pattern = 0x9E3779B9U;
   for (auto& block : wq) {
     block.d = axon::fp32_to_fp16(0.01F);
     for (auto& q : block.qs) {
-      q = static_cast<std::uint8_t>(rng() & 0xFF);
+      pattern = pattern * 1664525U + 1013904223U;  // any spread of nibbles will do for timing
+      q = static_cast<std::uint8_t>(pattern >> 24);
     }
   }
   const auto x = random_floats(n_in, 2);

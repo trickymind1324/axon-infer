@@ -71,7 +71,7 @@ TEST_CASE("perplexity scores the second half of every chunk", "[engine][perplexi
                                                [&](std::size_t c, double) { seen.push_back(c); });
   REQUIRE(result);
   CHECK(result->chunks == 3);
-  CHECK(result->scored_tokens == 3 * 16);
+  CHECK(result->scored_tokens == std::size_t{3} * 16);
   CHECK(seen == std::vector<std::size_t>{0, 1, 2});
   CHECK(result->running.size() == 3);
   CHECK(result->perplexity() > 1.0);
