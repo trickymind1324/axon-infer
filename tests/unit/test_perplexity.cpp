@@ -65,7 +65,7 @@ double reference_nll(axon::model::LlamaModel& model, std::span<const std::int32_
 
 TEST_CASE("perplexity scores the second half of every chunk", "[engine][perplexity]") {
   auto model = load_synthetic(32, 32);
-  const auto tokens = stream(3 * 32 + 5);  // three full chunks and a partial one
+  const auto tokens = stream(std::size_t{3} * 32 + 5);  // three full chunks and a partial one
   std::vector<std::size_t> seen;
   const auto result = axon::engine::perplexity(*model, tokens, {.chunk_size = 32},
                                                [&](std::size_t c, double) { seen.push_back(c); });
@@ -84,7 +84,7 @@ TEST_CASE("perplexity scores the second half of every chunk", "[engine][perplexi
 }
 
 TEST_CASE("perplexity is the same when the chunk is prefilled in pieces", "[engine][perplexity]") {
-  const auto tokens = stream(2 * 32);
+  const auto tokens = stream(std::size_t{2} * 32);
   auto whole = load_synthetic(32, 32);
   auto pieces = load_synthetic(8, 32);
   const auto a = axon::engine::perplexity(*whole, tokens, {.chunk_size = 32});
