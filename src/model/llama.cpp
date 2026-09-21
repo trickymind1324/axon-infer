@@ -17,12 +17,40 @@ namespace axon::model {
 
 namespace {
 
-// Y[n_rows][ne1] = X[n_rows][ne0] W^T, picking the kernel by weight dtype.
-void matmul_rows(const Tensor& w, const float* x, float* y, std::size_t n_rows) {
+// Y[n_rows][ne1] = X[n_rows][ne0] W^T, picking the kernel by weight dtype. Quantized weights
+// take the activation rows quantized to Q8_0 blocks in `xq` unless `exact` asks for the
+// float path.
+void matmul_rows(const Tensor& w, const float* x, float* y, std::size_t n_rows,
+                 std::span<BlockQ8_0> xq, bool exact) {
   const auto& k = kernels::kernels();
   const auto n_out = static_cast<std::size_t>(w.ne1);
   const auto n_in = static_cast<std::size_t>(w.ne0);
+  const auto quantize_rows = [&] {
+    const std::size_t nb = n_in / kQK8_0;
+    AXON_DCHECK(xq.size() >= n_rows * nb, "matmul_rows: activation scratch too small");
+    for (std::size_t r = 0; r < n_rows; ++r) {
+      k.quantize_row_q8_0(x + r * n_in, xq.data() + r * nb, n_in);
+    }
+  };
   switch (w.type) {
+  case DType::Q8_0:
+    if (exact) {
+      k.matmul_q8_0_rows(static_cast<const BlockQ8_0*>(w.data), x, y, n_rows, n_out, n_in);
+    } else {
+      quantize_rows();
+      k.matmul_q8_0_q8_rows(static_cast<const BlockQ8_0*>(w.data), xq.data(), y, n_rows, n_out,
+                            n_in);
+    }
+    return;
+  case DType::Q4_0:
+    if (exact) {
+      k.matmul_q4_0_rows(static_cast<const BlockQ4_0*>(w.data), x, y, n_rows, n_out, n_in);
+    } else {
+      quantize_rows();
+      k.matmul_q4_0_q8_rows(static_cast<const BlockQ4_0*>(w.data), xq.data(), y, n_rows, n_out,
+                            n_in);
+    }
+    return;
   case DType::F32:
     k.matmul_f32_rows(static_cast<const float*>(w.data), x, y, n_rows, n_out, n_in);
     return;
@@ -84,6 +112,7 @@ LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer
                        LlamaWeights weights, LoadOptions options)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
+      exact_activations_(options.exact_activations),
       arena_(cfg_.activation_bytes(max_seq_, max_ctx_)) {}
 
 Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::path& path,
@@ -192,6 +221,9 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
   arena_.reset();
   Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr);
+  const auto mm = [&](const Tensor& w, const float* x, float* y, std::size_t n_rows) {
+    matmul_rows(w, x, y, n_rows, a.xq, exact_activations_);
+  };
 
 #define AXON_DUMP(wanted, name, span)                                                              \
   do {                                                                                             \
@@ -219,9 +251,9 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
     rmsnorm_rows(a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "attn_norm_out", a.h);
-    matmul_rows(w.wq, a.h.data(), a.q.data(), seq);
-    matmul_rows(w.wk, a.h.data(), k_new, seq);
-    matmul_rows(w.wv, a.h.data(), v_new, seq);
+    mm(w.wq, a.h.data(), a.q.data(), seq);
+    mm(w.wk, a.h.data(), k_new, seq);
+    mm(w.wv, a.h.data(), v_new, seq);
     if (w.bq && w.bk && w.bv) {
       add_bias(a.q.data(), *w.bq, seq);
       add_bias(k_new, *w.bk, seq);
@@ -237,23 +269,23 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     k.attention_kv(a.q.data(), k_base, v_base, a.attn.data(), a.scores.data(), seq, n_past, n_head,
                    n_head_kv, head_dim, scale);
     AXON_DUMP(dump_this, "attn_out", a.attn);
-    matmul_rows(w.wo, a.attn.data(), a.h.data(), seq);
+    mm(w.wo, a.attn.data(), a.h.data(), seq);
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_mid", a.x);
 
     rmsnorm_rows(a.x, w.ffn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "ffn_norm_out", a.h);
-    matmul_rows(w.w_gate, a.h.data(), a.gate.data(), seq);
-    matmul_rows(w.w_up, a.h.data(), a.up.data(), seq);
+    mm(w.w_gate, a.h.data(), a.gate.data(), seq);
+    mm(w.w_up, a.h.data(), a.up.data(), seq);
     k.silu_mul(a.gate.data(), a.up.data(), a.gate.data(), seq * n_ff);
-    matmul_rows(w.w_down, a.gate.data(), a.h.data(), seq);
+    mm(w.w_down, a.gate.data(), a.h.data(), seq);
     AXON_DUMP(dump_this, "ffn_out", a.h);
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_out", a.x);
   }
 
   rmsnorm_rows(a.x, weights_.output_norm, a.h, seq, cfg_.rms_eps);
-  matmul_rows(weights_.output, a.h.data(), a.logits.data(), seq);
+  mm(weights_.output, a.h.data(), a.logits.data(), seq);
   AXON_DUMP(dumping, "logits", a.logits);
 #undef AXON_DUMP
   if (cache != nullptr) {

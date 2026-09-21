@@ -21,6 +21,10 @@ namespace axon::model {
 struct LoadOptions {
   std::size_t max_seq = 256;   // new tokens per forward call, clamped to max_ctx
   std::size_t max_ctx = 2048;  // cache length, clamped to the training context
+  // Quantized weights normally see activations quantized to Q8_0 blocks and an integer dot
+  // product. This keeps the activations in float and dequantizes the weights instead, for
+  // comparison.
+  bool exact_activations = false;
 };
 
 struct ForwardOptions {
@@ -63,6 +67,7 @@ public:
   [[nodiscard]] const GGUFFile& file() const noexcept { return file_; }
   [[nodiscard]] std::size_t max_seq() const noexcept { return max_seq_; }
   [[nodiscard]] std::size_t max_ctx() const noexcept { return max_ctx_; }
+  [[nodiscard]] bool exact_activations() const noexcept { return exact_activations_; }
   [[nodiscard]] std::size_t arena_high_water() const noexcept { return arena_.high_water(); }
   [[nodiscard]] std::size_t arena_capacity() const noexcept { return arena_.capacity(); }
 
@@ -78,6 +83,7 @@ private:
   LlamaWeights weights_;
   std::size_t max_seq_;
   std::size_t max_ctx_;
+  bool exact_activations_;
   Arena arena_;
 };
 

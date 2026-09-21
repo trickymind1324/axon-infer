@@ -5,9 +5,11 @@
 // SizeCounter and then against the real Arena.
 
 #include "core/arena.h"
+#include "core/dtype.h"
 
 #include "model/config.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 
@@ -24,6 +26,7 @@ struct Activations {
   std::span<float> up;      // [seq][n_ff]
   std::span<float> scores;  // [seq][ctx] attention scratch, ctx = positions attended over
   std::span<float> logits;  // [seq][n_vocab]
+  std::span<BlockQ8_0> xq;  // [seq][widest row / 32] quantized activations for quantized weights
 };
 
 // seq is the number of new positions in this call, ctx the total the attention scores span
@@ -45,16 +48,19 @@ Activations allocate_activations(Alloc& alloc, const LlamaConfig& cfg, std::size
   a.up = alloc.template alloc_array<float>(seq * cfg.n_ff);
   a.scores = alloc.template alloc_array<float>(seq * ctx);
   a.logits = alloc.template alloc_array<float>(seq * cfg.n_vocab);
+  const std::size_t widest = std::max({cfg.n_embd, cfg.n_embd_q(), cfg.n_ff});
+  a.xq = alloc.template alloc_array<BlockQ8_0>(seq * ((widest + kQK8_0 - 1) / kQK8_0));
   return a;
 }
 
-// Counts what the Arena would hand out, rounding each block like Arena::alloc does.
+// Counts what the Arena would hand out: each block starts at the next aligned offset, exactly
+// as Arena::alloc places it, so the total equals the arena's used() after the same calls.
 struct SizeCounter {
   std::size_t total = 0;
 
   template <class T> std::span<T> alloc_array(std::size_t count) {
-    const std::size_t bytes = count * sizeof(T);
-    total += (bytes + Arena::kDefaultAlign - 1) / Arena::kDefaultAlign * Arena::kDefaultAlign;
+    const std::size_t align = Arena::kDefaultAlign;
+    total = (total + align - 1) / align * align + count * sizeof(T);
     return {};
   }
 };

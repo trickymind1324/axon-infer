@@ -37,14 +37,15 @@ Expected<Tensor> bind_tensor(const GGUFFile& file, const std::string& name, Kind
     }
     break;
   case Kind::Matmul:
-    if (info->dtype == DType::Q8_0 || info->dtype == DType::Q4_0) {
-      return make_error(ErrorCode::Unsupported, fmt::format("{}: dtype {} has no kernels yet", name,
-                                                            dtype_name(info->dtype)));
-    }
-    if (info->dtype != DType::F32 && info->dtype != DType::F16 && info->dtype != DType::BF16) {
+    if (info->dtype != DType::F32 && info->dtype != DType::F16 && info->dtype != DType::BF16 &&
+        info->dtype != DType::Q8_0 && info->dtype != DType::Q4_0) {
       return make_error(ErrorCode::Unsupported,
-                        fmt::format("{}: expected dtype F32, F16 or BF16, found {}", name,
-                                    dtype_name(info->dtype)));
+                        fmt::format("{}: dtype {} has no kernels", name, dtype_name(info->dtype)));
+    }
+    if ((info->dtype == DType::Q8_0 || info->dtype == DType::Q4_0) && ne0 % kQK8_0 != 0) {
+      return make_error(ErrorCode::InvalidArgument,
+                        fmt::format("{}: quantized rows need a multiple of {} elements, found {}",
+                                    name, kQK8_0, ne0));
     }
     break;
   }

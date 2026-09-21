@@ -134,7 +134,8 @@ TEST_CASE("activation bytes grow with the sequence", "[model][config]") {
   const auto many = cfg->activation_bytes(64, 64);
   CHECK(one > 0);
   CHECK(many > one);
-  CHECK(one % 64 == 0);
-  // Ten buffers for one token: 4 x 64 floats, 2 x 32, 2 x 160, 1 x 1, 1 x 512.
-  CHECK(one == 4 * 256 + 2 * 128 + 2 * 640 + 64 + 2048);
+  // For one token: x, h, q (256 bytes each), k, v (128), attn (256), gate, up (640), scores
+  // (4 bytes, then padded to the next 64), logits (2048), and five Q8_0 blocks of 34 bytes for
+  // the quantized activation scratch, each block starting at a 64-byte boundary.
+  CHECK(one == 256 + 256 + 256 + 128 + 128 + 256 + 640 + 640 + 64 + 2048 + 5 * 34);
 }

@@ -106,12 +106,11 @@ TEST_CASE("forward rejects bad input", "[model][forward]") {
   CHECK_THAT(zero.error().message, ContainsSubstring("max_seq"));
 }
 
-TEST_CASE("loading a quantized file names the tensor", "[model][forward]") {
+TEST_CASE("a quantized file loads", "[model][forward]") {
   const auto model = axon::model::LlamaModel::load(
       axon::test::fixture_path("gguf/synthetic-2l-q4_0.gguf"), {.max_seq = 8, .max_ctx = 8});
-  REQUIRE_FALSE(model);
-  CHECK_THAT(model.error().message, ContainsSubstring("synthetic-2l-q4_0.gguf"));
-  CHECK_THAT(model.error().message, ContainsSubstring("Q4_0 has no kernels yet"));
+  REQUIRE(model);
+  CHECK((*model)->weights().token_embd.type == axon::DType::Q4_0);
 }
 
 TEST_CASE("forward performs no heap allocation", "[model][forward]") {

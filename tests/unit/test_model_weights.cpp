@@ -73,14 +73,20 @@ TEST_CASE("binding the synthetic model", "[model][weights]") {
   CHECK(layer.attn_norm.data != layer.ffn_norm.data);
 }
 
-TEST_CASE("quantized weights are refused until their kernels exist", "[model][weights]") {
-  const auto file = open_fixture("synthetic-2l-q8_0.gguf");
-  const auto cfg = axon::model::LlamaConfig::from_gguf(file);
-  REQUIRE(cfg);
-  const auto w = axon::model::LlamaWeights::bind(file, *cfg);
-  REQUIRE_FALSE(w);
-  CHECK(w.error().code == axon::ErrorCode::Unsupported);
-  CHECK_THAT(w.error().message, ContainsSubstring("dtype Q8_0 has no kernels yet"));
+TEST_CASE("quantized weights bind with their block types", "[model][weights]") {
+  for (const char* name : {"synthetic-2l-q8_0.gguf", "synthetic-2l-q4_0.gguf"}) {
+    const auto file = open_fixture(name);
+    const auto cfg = axon::model::LlamaConfig::from_gguf(file);
+    REQUIRE(cfg);
+    const auto w = axon::model::LlamaWeights::bind(file, *cfg);
+    INFO(name);
+    REQUIRE(w);
+    const auto expected =
+        std::string(name).find("q8_0") != std::string::npos ? axon::DType::Q8_0 : axon::DType::Q4_0;
+    CHECK(w->token_embd.type == expected);
+    CHECK(w->layers[0].wq.type == expected);
+    CHECK(w->layers[0].attn_norm.type == axon::DType::F32);
+  }
 }
 
 TEST_CASE("a transposed tensor is reported with both shapes", "[model][weights]") {
