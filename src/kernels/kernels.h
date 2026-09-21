@@ -69,6 +69,31 @@ struct KernelTable {
   void (*attention_kv)(const float* q, const float* k_cache, const float* v_cache, float* out,
                        float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
                        std::size_t n_head_kv, std::size_t head_dim, float scale);
+
+  // Quantized weights, F32 activations: y[o] = sum_i dequant(w[o][i]) * x[i], sequential in
+  // float. n_in is a multiple of 32.
+  void (*matmul_q8_0)(const BlockQ8_0* w, const float* x, float* y, std::size_t n_out,
+                      std::size_t n_in);
+  void (*matmul_q4_0)(const BlockQ4_0* w, const float* x, float* y, std::size_t n_out,
+                      std::size_t n_in);
+  // Quantized weights, Q8_0 activations: per block an int32 dot of the two int8 vectors,
+  // scaled by both fp16 scales and accumulated in float. The reduction the SIMD kernels
+  // reproduce.
+  void (*matmul_q8_0_q8)(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
+                         std::size_t n_in);
+  void (*matmul_q4_0_q8)(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
+                         std::size_t n_in);
+  // Rows variants: Y[n_rows][n_out] from X[n_rows][n_in] (float rows or Q8_0 block rows).
+  void (*matmul_q8_0_rows)(const BlockQ8_0* w, const float* x, float* y, std::size_t n_rows,
+                           std::size_t n_out, std::size_t n_in);
+  void (*matmul_q4_0_rows)(const BlockQ4_0* w, const float* x, float* y, std::size_t n_rows,
+                           std::size_t n_out, std::size_t n_in);
+  void (*matmul_q8_0_q8_rows)(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                              std::size_t n_out, std::size_t n_in);
+  void (*matmul_q4_0_q8_rows)(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                              std::size_t n_out, std::size_t n_in);
+  // Activation quantization, one row of n floats (a multiple of 32) into n / 32 blocks.
+  void (*quantize_row_q8_0)(const float* x, BlockQ8_0* out, std::size_t n);
 };
 
 // The table in use. Scalar until runtime dispatch lands.

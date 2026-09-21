@@ -20,6 +20,15 @@ constexpr KernelTable kScalarTable{
     .embedding_row = ref::embedding_row,
     .attention = ref::attention,
     .attention_kv = ref::attention_kv,
+    .matmul_q8_0 = ref::matmul_q8_0,
+    .matmul_q4_0 = ref::matmul_q4_0,
+    .matmul_q8_0_q8 = ref::matmul_q8_0_q8,
+    .matmul_q4_0_q8 = ref::matmul_q4_0_q8,
+    .matmul_q8_0_rows = ref::matmul_q8_0_rows,
+    .matmul_q4_0_rows = ref::matmul_q4_0_rows,
+    .matmul_q8_0_q8_rows = ref::matmul_q8_0_q8_rows,
+    .matmul_q4_0_q8_rows = ref::matmul_q4_0_q8_rows,
+    .quantize_row_q8_0 = ref::quantize_row_q8_0,
 };
 
 }  // namespace

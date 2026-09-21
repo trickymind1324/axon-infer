@@ -33,4 +33,20 @@ void attention_kv(const float* q, const float* k_cache, const float* v_cache, fl
                   float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
                   std::size_t n_head_kv, std::size_t head_dim, float scale);
 
+void matmul_q8_0(const BlockQ8_0* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
+void matmul_q4_0(const BlockQ4_0* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
+void matmul_q8_0_q8(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
+                    std::size_t n_in);
+void matmul_q4_0_q8(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
+                    std::size_t n_in);
+void matmul_q8_0_rows(const BlockQ8_0* w, const float* x, float* y, std::size_t n_rows,
+                      std::size_t n_out, std::size_t n_in);
+void matmul_q4_0_rows(const BlockQ4_0* w, const float* x, float* y, std::size_t n_rows,
+                      std::size_t n_out, std::size_t n_in);
+void matmul_q8_0_q8_rows(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                         std::size_t n_out, std::size_t n_in);
+void matmul_q4_0_q8_rows(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                         std::size_t n_out, std::size_t n_in);
+void quantize_row_q8_0(const float* x, BlockQ8_0* out, std::size_t n);
+
 }  // namespace axon::kernels::ref

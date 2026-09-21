@@ -88,8 +88,67 @@ void bm_matmul_f16(benchmark::State& state) {
   report_matmul(state, n_out, n_in, w.size() * sizeof(std::uint16_t));
 }
 
+// Q8_0 weights against float activations (dequantize on the fly) and against Q8_0
+// activations (integer dot). The second is the path the model uses by default.
+void bm_matmul_q8_0(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const bool int_dot = state.range(2) != 0;
+  const auto w = random_floats(n_out * n_in, 1);
+  std::vector<axon::BlockQ8_0> wq(n_out * n_in / 32);
+  axon::quantize_row_q8_0(w.data(), wq.data(), w.size());
+  const auto x = random_floats(n_in, 2);
+  std::vector<axon::BlockQ8_0> xq(n_in / 32);
+  axon::quantize_row_q8_0(x.data(), xq.data(), n_in);
+  std::vector<float> y(n_out);
+  const auto& k = axon::kernels::kernels();
+  for (auto _ : state) {
+    if (int_dot) {
+      k.matmul_q8_0_q8(wq.data(), xq.data(), y.data(), n_out, n_in);
+    } else {
+      k.matmul_q8_0(wq.data(), x.data(), y.data(), n_out, n_in);
+    }
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ8_0));
+}
+
+// Q4_0 weights are built by hand from the same floats: the nibble layout is fixed, the exact
+// values do not matter for timing.
+void bm_matmul_q4_0(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const bool int_dot = state.range(2) != 0;
+  std::vector<axon::BlockQ4_0> wq(n_out * n_in / 32);
+  std::mt19937 rng(3);
+  for (auto& block : wq) {
+    block.d = axon::fp32_to_fp16(0.01F);
+    for (auto& q : block.qs) {
+      q = static_cast<std::uint8_t>(rng() & 0xFF);
+    }
+  }
+  const auto x = random_floats(n_in, 2);
+  std::vector<axon::BlockQ8_0> xq(n_in / 32);
+  axon::quantize_row_q8_0(x.data(), xq.data(), n_in);
+  std::vector<float> y(n_out);
+  const auto& k = axon::kernels::kernels();
+  for (auto _ : state) {
+    if (int_dot) {
+      k.matmul_q4_0_q8(wq.data(), xq.data(), y.data(), n_out, n_in);
+    } else {
+      k.matmul_q4_0(wq.data(), x.data(), y.data(), n_out, n_in);
+    }
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ4_0));
+}
+
 }  // namespace
 
 BENCHMARK(bm_parallel_for_overhead)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->UseRealTime();
 BENCHMARK(bm_matmul_f32)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
 BENCHMARK(bm_matmul_f16)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
+BENCHMARK(bm_matmul_q8_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
+BENCHMARK(bm_matmul_q4_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
