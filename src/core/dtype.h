@@ -96,6 +96,15 @@ struct BlockQ4_0 {
 };
 static_assert(sizeof(BlockQ4_0) == 18);
 
+// Block conversions with the exact ggml formulas. Q8_0: value = q * d. Q4_0: value =
+// (nibble - 8) * d, low nibbles are elements 0..15 and high nibbles 16..31.
+void dequantize_block_q8_0(const BlockQ8_0& block, float* out);  // 32 floats
+void dequantize_block_q4_0(const BlockQ4_0& block, float* out);
+// Activation quantization as ggml's quantize_row_q8_0: per block of 32, d = max|x| / 127 and
+// q = round(x / d) with ties away from zero. A block of zeros gets d = 0 and all-zero q.
+// n must be a multiple of 32.
+void quantize_row_q8_0(const float* x, BlockQ8_0* out, std::size_t n);
+
 // Scalar conversions, exact for every bit pattern (subnormals, inf, nan preserved).
 float fp16_to_fp32(std::uint16_t bits);
 std::uint16_t fp32_to_fp16(float value);  // round to nearest even

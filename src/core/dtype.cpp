@@ -1,5 +1,7 @@
 #include "core/dtype.h"
 
+#include "core/check.h"
+
 #include <fmt/format.h>
 
 #include <bit>
@@ -281,6 +283,39 @@ std::uint16_t fp32_to_bf16(float value) {
   const std::uint32_t lsb = (bits >> 16) & 1U;
   const std::uint32_t rounded = bits + 0x7FFFU + lsb;  // nearest even
   return static_cast<std::uint16_t>(rounded >> 16);
+}
+
+void dequantize_block_q8_0(const BlockQ8_0& block, float* out) {
+  const float d = fp16_to_fp32(block.d);
+  for (std::uint32_t i = 0; i < kQK8_0; ++i) {
+    out[i] = static_cast<float>(block.qs[i]) * d;
+  }
+}
+
+void dequantize_block_q4_0(const BlockQ4_0& block, float* out) {
+  const float d = fp16_to_fp32(block.d);
+  for (std::uint32_t i = 0; i < kQK4_0 / 2; ++i) {
+    out[i] = static_cast<float>(static_cast<int>(block.qs[i] & 0x0F) - 8) * d;
+    out[i + kQK4_0 / 2] = static_cast<float>(static_cast<int>(block.qs[i] >> 4) - 8) * d;
+  }
+}
+
+void quantize_row_q8_0(const float* x, BlockQ8_0* out, std::size_t n) {
+  AXON_DCHECK(n % kQK8_0 == 0, "quantize_row_q8_0: {} is not a multiple of {}", n, kQK8_0);
+  for (std::size_t b = 0; b < n / kQK8_0; ++b) {
+    const float* block = x + b * kQK8_0;
+    float amax = 0.0F;
+    for (std::uint32_t i = 0; i < kQK8_0; ++i) {
+      const float a = std::fabs(block[i]);
+      amax = a > amax ? a : amax;
+    }
+    const float d = amax / 127.0F;
+    const float id = d != 0.0F ? 1.0F / d : 0.0F;
+    out[b].d = fp32_to_fp16(d);
+    for (std::uint32_t i = 0; i < kQK8_0; ++i) {
+      out[b].qs[i] = static_cast<std::int8_t>(std::roundf(block[i] * id));
+    }
+  }
 }
 
 }  // namespace axon
