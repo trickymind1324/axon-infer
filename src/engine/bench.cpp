@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <utility>
 #include <vector>
 
 namespace axon::engine {
@@ -62,7 +63,7 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
       return out.error();
     }
     const Stats& s = engine.stats();
-    if (s.generated_tokens != static_cast<std::size_t>(opts.generate)) {
+    if (std::cmp_not_equal(s.generated_tokens, opts.generate)) {
       return make_error(ErrorCode::Internal,
                         fmt::format("benchmark: generated {} tokens instead of {}",
                                     s.generated_tokens, opts.generate));
@@ -110,13 +111,7 @@ std::string bench_json(const BenchResult& r, std::string_view model_file,
         i == 0 ? "" : ", ", r.runs[i].prefill_s, r.runs[i].decode_s, r.runs[i].peak_rss_mb);
   }
   return fmt::format(
-      "{{\"model_file\": \"{}\", \"model\": \"{}\", \"threads\": {}, \"context\": {}, "
-      "\"prompt_tokens\": {}, \"generated_tokens\": {}, \"runs\": {}, "
-      "\"prefill_tok_s\": {{\"median\": {:.3f}, \"best\": {:.3f}}}, "
-      "\"decode_tok_s\": {{\"median\": {:.3f}, \"best\": {:.3f}}}, "
-      "\"weight_bytes_per_token\": {}, \"cache_bytes_per_token\": {:.0f}, "
-      "\"weight_gb_s\": {:.3f}, \"peak_rss_mb\": {:.1f}, "
-      "\"load_average\": {{\"before\": {:.2f}, \"after\": {:.2f}}}, \"measurements\": [{}]}}",
+      R"json({{"model_file": "{}", "model": "{}", "threads": {}, "context": {}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
       model_file, description, r.threads, r.context, r.prompt_tokens, r.generated_tokens,
       r.runs.size(), r.prefill_tok_s_median, r.prefill_tok_s_best, r.decode_tok_s_median,
       r.decode_tok_s_best, r.weight_bytes_per_token, r.cache_bytes_per_token, r.weight_gb_s_median,

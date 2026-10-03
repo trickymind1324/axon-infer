@@ -44,6 +44,7 @@ for threads in "${THREAD_COUNTS[@]}"; do
   "$PYTHON" - "$RESULT" "$OUT" <<PY
 import json, sys
 result = json.loads(sys.argv[1])
+result["description"] = result.pop("model")  # the model key below holds the file metadata
 record = {
     "step": "$STEP", "date": "$DATE", "host": "$HOST", "cpu": "$CPU", "ram_gb": $RAM_GB,
     "os": "$OS", "compiler": "$COMPILER", "commit": "$COMMIT", "dirty": $DIRTY,

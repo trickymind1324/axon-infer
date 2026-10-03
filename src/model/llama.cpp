@@ -125,7 +125,7 @@ std::size_t sum_weight_bytes(const LlamaWeights& w, const LlamaConfig& cfg) {
     total += l.attn_norm.total_bytes + l.wq.total_bytes + l.wk.total_bytes + l.wv.total_bytes +
              l.wo.total_bytes + l.ffn_norm.total_bytes + l.w_gate.total_bytes + l.w_up.total_bytes +
              l.w_down.total_bytes;
-    if (l.bq) {
+    if (l.bq && l.bk && l.bv) {
       total += l.bq->total_bytes + l.bk->total_bytes + l.bv->total_bytes;
     }
   }
