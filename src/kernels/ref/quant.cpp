@@ -168,10 +168,10 @@ float dot_q4_1_q8(const BlockQ4_1* row, const BlockQ8_0* xq, std::size_t n_block
     for (std::uint32_t i = 0; i < kQK4_1 / 2; ++i) {
       const int low = static_cast<int>(row[b].qs[i] & 0x0F);
       const int high = static_cast<int>(row[b].qs[i] >> 4);
-      const auto x0 = static_cast<std::int32_t>(xq[b].qs[i]);
-      const auto x1 = static_cast<std::int32_t>(xq[b].qs[i + kQK4_1 / 2]);
-      sumi += low * x0 + high * x1;
-      sumx += x0 + x1;
+      sumi += low * static_cast<std::int32_t>(xq[b].qs[i]) +
+              high * static_cast<std::int32_t>(xq[b].qs[i + kQK4_1 / 2]);
+      sumx += static_cast<std::int32_t>(xq[b].qs[i]) +
+              static_cast<std::int32_t>(xq[b].qs[i + kQK4_1 / 2]);
     }
     const float dx = fp16_to_fp32(xq[b].d);
     acc += static_cast<float>(sumi) * fp16_to_fp32(row[b].d) * dx +
