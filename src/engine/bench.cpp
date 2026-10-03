@@ -107,7 +107,7 @@ std::string bench_json(const BenchResult& r, std::string_view model_file,
   std::string runs;
   for (std::size_t i = 0; i < r.runs.size(); ++i) {
     runs += fmt::format(
-        "{}{{\"prefill_s\": {:.4f}, \"decode_s\": {:.4f}, \"peak_rss_mb\": {:.1f}}}",
+        R"json({}{{"prefill_s": {:.4f}, "decode_s": {:.4f}, "peak_rss_mb": {:.1f}}})json",
         i == 0 ? "" : ", ", r.runs[i].prefill_s, r.runs[i].decode_s, r.runs[i].peak_rss_mb);
   }
   return fmt::format(
