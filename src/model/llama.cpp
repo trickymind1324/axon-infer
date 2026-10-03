@@ -203,7 +203,9 @@ Expected<std::span<const float>> LlamaModel::forward_one(KVCache& cache, std::in
 //
 // Threads split output columns of every matmul, heads of the attention and rows of the
 // activation quantization. No partial sum ever crosses a thread, so the logits do not depend
-// on the thread count.
+// on the thread count. Work is claimed in chunks rather than split statically, because the
+// M1's efficiency cores are a few times slower than its performance cores and a static split
+// makes every launch wait for the slowest share.
 Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> tokens,
                                                  KVCache* cache, const ForwardOptions& opts) {
   const std::size_t seq = tokens.size();
@@ -262,13 +264,16 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     const std::size_t nb = n_in / kQK8_0;
     const bool quantize = needs_q8_activations(w, exact_activations_);
     if (quantize) {
-      pool_.parallel_for(0, seq, 0, [&](std::size_t begin, std::size_t end, int) {
+      pool_.parallel_for(0, seq, 4, [&](std::size_t begin, std::size_t end, int) {
         for (std::size_t r = begin; r < end; ++r) {
           k.quantize_row_q8_0(x + r * n_in, a.xq.data() + r * nb, n_in);
         }
       });
     }
-    pool_.parallel_for(0, n_out, 0, [&](std::size_t begin, std::size_t end, int) {
+    // About eight chunks per thread: enough to balance fast and slow cores, few enough that
+    // the atomic claim per chunk is noise next to the columns it covers.
+    const std::size_t chunk = std::max<std::size_t>(16, n_out / (n_threads * 8));
+    pool_.parallel_for(0, n_out, chunk, [&](std::size_t begin, std::size_t end, int) {
       for (std::size_t r = 0; r < seq; ++r) {
         matmul_columns(w, x + r * n_in, quantize ? a.xq.data() + r * nb : nullptr, y + r * n_out,
                        begin, end, exact_activations_);
@@ -317,7 +322,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     AXON_DUMP(dump_this, "q", a.q);
     AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
     AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
-    pool_.parallel_for(0, n_head, 0, [&](std::size_t begin, std::size_t end, int tid) {
+    pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
       float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
       k.attention_kv_heads(a.q.data(), k_base, v_base, a.attn.data(), scores, seq, n_past, n_head,
                            n_head_kv, head_dim, scale, begin, end);
