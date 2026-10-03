@@ -49,5 +49,7 @@ fi
 
 step "benchmark smoke"
 ./build/release/bench/bench_kernels --benchmark_min_time=0.01s
+./build/release/apps/axon/axon bench -m tests/reference/fixtures/gguf/synthetic-2l-q8_0.gguf --prompt-tokens 32 -n 8 --runs 2 --ctx 128 --json > /dev/null
+"${PYTHON:-python3}" bench/render_tables.py --self-test
 
 step "all checks passed"
