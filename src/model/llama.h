@@ -4,6 +4,7 @@
 #include "core/arena.h"
 #include "core/expected.h"
 #include "core/gguf.h"
+#include "core/threadpool.h"
 
 #include "model/config.h"
 #include "model/kv_cache.h"
@@ -25,6 +26,9 @@ struct LoadOptions {
   // product. This keeps the activations in float and dequantizes the weights instead, for
   // comparison.
   bool exact_activations = false;
+  // Threads for the forward pass. 0 means one per physical core. Any count gives logits
+  // bit-identical to one thread, because work is split so no reduction crosses threads.
+  int n_threads = 0;
 };
 
 struct ForwardOptions {
@@ -68,6 +72,10 @@ public:
   [[nodiscard]] std::size_t max_seq() const noexcept { return max_seq_; }
   [[nodiscard]] std::size_t max_ctx() const noexcept { return max_ctx_; }
   [[nodiscard]] bool exact_activations() const noexcept { return exact_activations_; }
+  [[nodiscard]] int n_threads() const noexcept { return pool_.size(); }
+  // Bytes of weights one forward pass reads per position, the number to hold against memory
+  // bandwidth.
+  [[nodiscard]] std::size_t weight_bytes_per_token() const noexcept { return weight_bytes_; }
   [[nodiscard]] std::size_t arena_high_water() const noexcept { return arena_.high_water(); }
   [[nodiscard]] std::size_t arena_capacity() const noexcept { return arena_.capacity(); }
 
@@ -84,6 +92,8 @@ private:
   std::size_t max_seq_;
   std::size_t max_ctx_;
   bool exact_activations_;
+  ThreadPool pool_;
+  std::size_t weight_bytes_ = 0;
   Arena arena_;
 };
 

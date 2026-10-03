@@ -39,8 +39,10 @@ struct LlamaConfig {
   // One line for logs and the CLI banner.
   [[nodiscard]] std::string describe() const;
   // Arena bytes for the larger of the two forward paths: the cache-free pass over max_seq
-  // tokens, or max_seq new tokens attending over a cache of max_ctx positions.
-  [[nodiscard]] std::size_t activation_bytes(std::size_t max_seq, std::size_t max_ctx) const;
+  // tokens, or max_seq new tokens attending over a cache of max_ctx positions, with a score
+  // scratch per thread.
+  [[nodiscard]] std::size_t activation_bytes(std::size_t max_seq, std::size_t max_ctx,
+                                             std::size_t n_threads = 1) const;
 
   [[nodiscard]] std::uint32_t n_embd_kv() const { return n_head_kv * head_dim; }
   [[nodiscard]] std::uint32_t n_embd_q() const { return n_head * head_dim; }

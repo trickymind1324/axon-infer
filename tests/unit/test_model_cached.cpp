@@ -168,7 +168,9 @@ TEST_CASE("the arena covers both forward paths exactly", "[model][cache]") {
   const std::size_t max_seq = 8;
   const std::size_t max_ctx = 24;
   auto model = load_synthetic(max_seq, max_ctx);
-  CHECK(model->arena_capacity() == model->config().activation_bytes(max_seq, max_ctx));
+  CHECK(model->arena_capacity() ==
+        model->config().activation_bytes(max_seq, max_ctx,
+                                         static_cast<std::size_t>(model->n_threads())));
   std::vector<std::int32_t> tokens(max_ctx);
   for (std::size_t i = 0; i < max_ctx; ++i) {
     tokens[i] = static_cast<std::int32_t>((i * 53) % kVocab);

@@ -16,8 +16,10 @@ namespace axon::model {
 struct Tensor {
   const void* data = nullptr;
   DType type = DType::F32;
-  std::uint64_t ne0 = 0;  // innermost (n_in for a matmul weight)
-  std::uint64_t ne1 = 0;  // n_out for a matmul weight, 1 for vectors
+  std::uint64_t ne0 = 0;        // innermost (n_in for a matmul weight)
+  std::uint64_t ne1 = 0;        // n_out for a matmul weight, 1 for vectors
+  std::size_t row_bytes = 0;    // bytes per row of ne0 elements, for splitting rows across threads
+  std::size_t total_bytes = 0;  // row_bytes * ne1, what one pass over the tensor reads
 };
 
 struct LayerWeights {

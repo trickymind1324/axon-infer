@@ -189,6 +189,7 @@ struct GenerateCli {
   int n_tokens = 20;
   std::size_t max_seq = 256;
   std::size_t ctx = 2048;
+  int threads = 0;
   bool no_cache = false;
   bool no_bos = false;
   bool stats = false;
@@ -249,7 +250,7 @@ int run_generate(const GenerateCli& opt) {
   const std::size_t ctx = use_cache ? opt.ctx : opt.max_seq;
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, ctx), .max_ctx = ctx});
+      opt.model, {.max_seq = std::min(opt.max_seq, ctx), .max_ctx = ctx, .n_threads = opt.threads});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -302,6 +303,7 @@ struct ChatCli {
   std::size_t ctx = 2048;
   std::size_t max_seq = 256;
   int max_tokens = 256;
+  int threads = 0;
   bool stats = false;
   SamplingCli sampling;
 };
@@ -309,7 +311,8 @@ struct ChatCli {
 int run_chat(const ChatCli& opt) {
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, opt.ctx), .max_ctx = opt.ctx});
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, opt.ctx), .max_ctx = opt.ctx, .n_threads = opt.threads});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -324,8 +327,8 @@ int run_chat(const ChatCli& opt) {
   const auto load_s =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_load).count();
 
-  fmt::print("model: {} ({}), loaded in {:.2f} s\n", model.file().model_name(),
-             model.config().describe(), load_s);
+  fmt::print("model: {} ({}), loaded in {:.2f} s, {} threads\n", model.file().model_name(),
+             model.config().describe(), load_s, model.n_threads());
   fmt::print("chat template: {}, context {} tokens, temperature {}\n", tmpl.source(),
              model.max_ctx(), opt.sampling.temperature);
   fmt::print("type a message and press enter. /clear starts over, /stats shows the last turn, "
@@ -426,6 +429,9 @@ int run(int argc, char** argv) {
       ->default_val(256);
   gen->add_option("--ctx", generate.ctx, "key/value cache length (prompt plus generated tokens)")
       ->default_val(2048);
+  gen->add_option("--threads,-t", generate.threads,
+                  "threads for the forward pass, 0 for one per core")
+      ->default_val(0);
   gen->add_flag("--no-cache", generate.no_cache,
                 "recompute the whole sequence every step instead of using the cache (greedy)");
   gen->add_flag("--no-bos", generate.no_bos, "do not prepend the BOS token");
@@ -443,6 +449,8 @@ int run(int argc, char** argv) {
   ch->add_option("--ctx", chat.ctx, "key/value cache length")->default_val(2048);
   ch->add_option("--max-seq", chat.max_seq, "tokens per forward call")->default_val(256);
   ch->add_option("--max-tokens", chat.max_tokens, "longest reply in tokens")->default_val(256);
+  ch->add_option("--threads,-t", chat.threads, "threads for the forward pass, 0 for one per core")
+      ->default_val(0);
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
   add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 

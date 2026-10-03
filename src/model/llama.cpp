@@ -8,7 +8,9 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -17,65 +19,59 @@ namespace axon::model {
 
 namespace {
 
-// Y[n_rows][ne1] = X[n_rows][ne0] W^T, picking the kernel by weight dtype. Quantized weights
-// take the activation rows quantized to Q8_0 blocks in `xq` unless `exact` asks for the
-// float path.
-void matmul_rows(const Tensor& w, const float* x, float* y, std::size_t n_rows,
-                 std::span<BlockQ8_0> xq, bool exact) {
+// y[n_out] = W[n_out][n_in] x[n_in] for one activation row, over output rows [begin, end) of
+// the weight. Quantized weights take the row's Q8_0 blocks in `xq` unless `exact` asks for the
+// float path. Each output element is computed by exactly one call with the same instruction
+// sequence whatever the split, which is what keeps threaded results bit-identical.
+void matmul_columns(const Tensor& w, const float* x, const BlockQ8_0* xq, float* y,
+                    std::size_t begin, std::size_t end, bool exact) {
   const auto& k = kernels::kernels();
-  const auto n_out = static_cast<std::size_t>(w.ne1);
   const auto n_in = static_cast<std::size_t>(w.ne0);
-  const auto quantize_rows = [&] {
-    const std::size_t nb = n_in / kQK8_0;
-    AXON_DCHECK(xq.size() >= n_rows * nb, "matmul_rows: activation scratch too small");
-    for (std::size_t r = 0; r < n_rows; ++r) {
-      k.quantize_row_q8_0(x + r * n_in, xq.data() + r * nb, n_in);
-    }
-  };
+  const std::size_t n_out = end - begin;
+  const auto* base = static_cast<const std::byte*>(w.data) + begin * w.row_bytes;
+  float* out = y + begin;
   switch (w.type) {
+  case DType::F32:
+    k.matmul_f32(reinterpret_cast<const float*>(base), x, out, n_out, n_in);
+    return;
+  case DType::F16:
+    k.matmul_f16(reinterpret_cast<const std::uint16_t*>(base), x, out, n_out, n_in);
+    return;
+  case DType::BF16:
+    k.matmul_bf16(reinterpret_cast<const std::uint16_t*>(base), x, out, n_out, n_in);
+    return;
   case DType::Q8_0:
     if (exact) {
-      k.matmul_q8_0_rows(static_cast<const BlockQ8_0*>(w.data), x, y, n_rows, n_out, n_in);
+      k.matmul_q8_0(reinterpret_cast<const BlockQ8_0*>(base), x, out, n_out, n_in);
     } else {
-      quantize_rows();
-      k.matmul_q8_0_q8_rows(static_cast<const BlockQ8_0*>(w.data), xq.data(), y, n_rows, n_out,
-                            n_in);
+      k.matmul_q8_0_q8(reinterpret_cast<const BlockQ8_0*>(base), xq, out, n_out, n_in);
     }
     return;
   case DType::Q4_0:
     if (exact) {
-      k.matmul_q4_0_rows(static_cast<const BlockQ4_0*>(w.data), x, y, n_rows, n_out, n_in);
+      k.matmul_q4_0(reinterpret_cast<const BlockQ4_0*>(base), x, out, n_out, n_in);
     } else {
-      quantize_rows();
-      k.matmul_q4_0_q8_rows(static_cast<const BlockQ4_0*>(w.data), xq.data(), y, n_rows, n_out,
-                            n_in);
+      k.matmul_q4_0_q8(reinterpret_cast<const BlockQ4_0*>(base), xq, out, n_out, n_in);
     }
     return;
   case DType::Q4_1:
     if (exact) {
-      k.matmul_q4_1_rows(static_cast<const BlockQ4_1*>(w.data), x, y, n_rows, n_out, n_in);
+      k.matmul_q4_1(reinterpret_cast<const BlockQ4_1*>(base), x, out, n_out, n_in);
     } else {
-      quantize_rows();
-      k.matmul_q4_1_q8_rows(static_cast<const BlockQ4_1*>(w.data), xq.data(), y, n_rows, n_out,
-                            n_in);
+      k.matmul_q4_1_q8(reinterpret_cast<const BlockQ4_1*>(base), xq, out, n_out, n_in);
     }
     return;
   case DType::Q6_K:
     // Float activations only: the super-block format has no integer path yet.
-    k.matmul_q6_k_rows(static_cast<const BlockQ6_K*>(w.data), x, y, n_rows, n_out, n_in);
-    return;
-  case DType::F32:
-    k.matmul_f32_rows(static_cast<const float*>(w.data), x, y, n_rows, n_out, n_in);
-    return;
-  case DType::F16:
-    k.matmul_f16_rows(static_cast<const std::uint16_t*>(w.data), x, y, n_rows, n_out, n_in);
-    return;
-  case DType::BF16:
-    k.matmul_bf16_rows(static_cast<const std::uint16_t*>(w.data), x, y, n_rows, n_out, n_in);
+    k.matmul_q6_k(reinterpret_cast<const BlockQ6_K*>(base), x, out, n_out, n_in);
     return;
   default:
-    AXON_CHECK(false, "matmul_rows: unbound dtype {}", dtype_name(w.type));
+    AXON_CHECK(false, "matmul: unbound dtype {}", dtype_name(w.type));
   }
+}
+
+bool needs_q8_activations(const Tensor& w, bool exact) {
+  return !exact && (w.type == DType::Q8_0 || w.type == DType::Q4_0 || w.type == DType::Q4_1);
 }
 
 void add_bias(float* rows, const Tensor& bias, std::size_t n_rows) {
@@ -119,14 +115,33 @@ Expected<bool> dump(const ForwardOptions& opts, bool wanted, const char* name,
   return true;
 }
 
+std::size_t sum_weight_bytes(const LlamaWeights& w, const LlamaConfig& cfg) {
+  std::size_t total = w.token_embd.row_bytes;  // one embedding row per token
+  total += w.output_norm.total_bytes + w.output.total_bytes;
+  if (w.rope_freqs) {
+    total += w.rope_freqs->total_bytes;
+  }
+  for (const auto& l : w.layers) {
+    total += l.attn_norm.total_bytes + l.wq.total_bytes + l.wk.total_bytes + l.wv.total_bytes +
+             l.wo.total_bytes + l.ffn_norm.total_bytes + l.w_gate.total_bytes + l.w_up.total_bytes +
+             l.w_down.total_bytes;
+    if (l.bq) {
+      total += l.bq->total_bytes + l.bk->total_bytes + l.bv->total_bytes;
+    }
+  }
+  static_cast<void>(cfg);
+  return total;
+}
+
 }  // namespace
 
 LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer> tokenizer,
                        LlamaWeights weights, LoadOptions options)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
-      exact_activations_(options.exact_activations),
-      arena_(cfg_.activation_bytes(max_seq_, max_ctx_)) {}
+      exact_activations_(options.exact_activations), pool_(options.n_threads),
+      weight_bytes_(sum_weight_bytes(weights_, cfg_)),
+      arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()))) {}
 
 Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::path& path,
                                                        LoadOptions options) {
@@ -185,6 +200,10 @@ Expected<std::span<const float>> LlamaModel::forward_one(KVCache& cache, std::in
 // The one forward pass. Without a cache, keys and values live in the arena and the attention
 // spans the new tokens only. With a cache, new keys and values are written straight into the
 // cache rows after the ones already there, and the attention spans the whole cache.
+//
+// Threads split output columns of every matmul, heads of the attention and rows of the
+// activation quantization. No partial sum ever crosses a thread, so the logits do not depend
+// on the thread count.
 Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> tokens,
                                                  KVCache* cache, const ForwardOptions& opts) {
   const std::size_t seq = tokens.size();
@@ -223,6 +242,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   const std::size_t kv_row = cfg_.n_embd_kv();
   const std::size_t total = n_past + seq;
   const bool dumping = opts.dump_layer != ForwardOptions::kNoDump;
+  const auto n_threads = static_cast<std::size_t>(pool_.size());
   const kernels::RopeParams rope{
       .head_dim = head_dim,
       .rotary_dim = cfg_.rotary_dim,
@@ -233,9 +253,27 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   const float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
 
   arena_.reset();
-  Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr);
-  const auto mm = [&](const Tensor& w, const float* x, float* y, std::size_t n_rows) {
-    matmul_rows(w, x, y, n_rows, a.xq, exact_activations_);
+  Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr, n_threads);
+
+  // Y[seq][n_out] = X[seq][n_in] W^T with output columns split across threads.
+  const auto mm = [&](const Tensor& w, const float* x, float* y) {
+    const auto n_in = static_cast<std::size_t>(w.ne0);
+    const auto n_out = static_cast<std::size_t>(w.ne1);
+    const std::size_t nb = n_in / kQK8_0;
+    const bool quantize = needs_q8_activations(w, exact_activations_);
+    if (quantize) {
+      pool_.parallel_for(0, seq, 0, [&](std::size_t begin, std::size_t end, int) {
+        for (std::size_t r = begin; r < end; ++r) {
+          k.quantize_row_q8_0(x + r * n_in, a.xq.data() + r * nb, n_in);
+        }
+      });
+    }
+    pool_.parallel_for(0, n_out, 0, [&](std::size_t begin, std::size_t end, int) {
+      for (std::size_t r = 0; r < seq; ++r) {
+        matmul_columns(w, x + r * n_in, quantize ? a.xq.data() + r * nb : nullptr, y + r * n_out,
+                       begin, end, exact_activations_);
+      }
+    });
   };
 
 #define AXON_DUMP(wanted, name, span)                                                              \
@@ -264,9 +302,9 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
     rmsnorm_rows(a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "attn_norm_out", a.h);
-    mm(w.wq, a.h.data(), a.q.data(), seq);
-    mm(w.wk, a.h.data(), k_new, seq);
-    mm(w.wv, a.h.data(), v_new, seq);
+    mm(w.wq, a.h.data(), a.q.data());
+    mm(w.wk, a.h.data(), k_new);
+    mm(w.wv, a.h.data(), v_new);
     if (w.bq && w.bk && w.bv) {
       add_bias(a.q.data(), *w.bq, seq);
       add_bias(k_new, *w.bk, seq);
@@ -279,26 +317,29 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     AXON_DUMP(dump_this, "q", a.q);
     AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
     AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
-    k.attention_kv(a.q.data(), k_base, v_base, a.attn.data(), a.scores.data(), seq, n_past, n_head,
-                   n_head_kv, head_dim, scale);
+    pool_.parallel_for(0, n_head, 0, [&](std::size_t begin, std::size_t end, int tid) {
+      float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
+      k.attention_kv_heads(a.q.data(), k_base, v_base, a.attn.data(), scores, seq, n_past, n_head,
+                           n_head_kv, head_dim, scale, begin, end);
+    });
     AXON_DUMP(dump_this, "attn_out", a.attn);
-    mm(w.wo, a.attn.data(), a.h.data(), seq);
+    mm(w.wo, a.attn.data(), a.h.data());
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_mid", a.x);
 
     rmsnorm_rows(a.x, w.ffn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "ffn_norm_out", a.h);
-    mm(w.w_gate, a.h.data(), a.gate.data(), seq);
-    mm(w.w_up, a.h.data(), a.up.data(), seq);
+    mm(w.w_gate, a.h.data(), a.gate.data());
+    mm(w.w_up, a.h.data(), a.up.data());
     k.silu_mul(a.gate.data(), a.up.data(), a.gate.data(), seq * n_ff);
-    mm(w.w_down, a.gate.data(), a.h.data(), seq);
+    mm(w.w_down, a.gate.data(), a.h.data());
     AXON_DUMP(dump_this, "ffn_out", a.h);
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_out", a.x);
   }
 
   rmsnorm_rows(a.x, weights_.output_norm, a.h, seq, cfg_.rms_eps);
-  mm(weights_.output, a.h.data(), a.logits.data(), seq);
+  mm(weights_.output, a.h.data(), a.logits.data());
   AXON_DUMP(dumping, "logits", a.logits);
 #undef AXON_DUMP
   if (cache != nullptr) {

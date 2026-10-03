@@ -31,10 +31,11 @@ struct Activations {
 
 // seq is the number of new positions in this call, ctx the total the attention scores span
 // (seq for the cache-free pass, cached + seq with a cache). with_kv allocates the k and v
-// buffers the cache-free pass needs.
+// buffers the cache-free pass needs. Every thread that runs attention gets its own score
+// scratch, so the scores block is n_threads times the single-threaded size.
 template <class Alloc>
 Activations allocate_activations(Alloc& alloc, const LlamaConfig& cfg, std::size_t seq,
-                                 std::size_t ctx, bool with_kv) {
+                                 std::size_t ctx, bool with_kv, std::size_t n_threads) {
   Activations a;
   a.x = alloc.template alloc_array<float>(seq * cfg.n_embd);
   a.h = alloc.template alloc_array<float>(seq * cfg.n_embd);
@@ -46,7 +47,7 @@ Activations allocate_activations(Alloc& alloc, const LlamaConfig& cfg, std::size
   a.attn = alloc.template alloc_array<float>(seq * cfg.n_embd_q());
   a.gate = alloc.template alloc_array<float>(seq * cfg.n_ff);
   a.up = alloc.template alloc_array<float>(seq * cfg.n_ff);
-  a.scores = alloc.template alloc_array<float>(seq * ctx);
+  a.scores = alloc.template alloc_array<float>(n_threads * seq * ctx);
   a.logits = alloc.template alloc_array<float>(seq * cfg.n_vocab);
   const std::size_t widest = std::max({cfg.n_embd, cfg.n_embd_q(), cfg.n_ff});
   a.xq = alloc.template alloc_array<BlockQ8_0>(seq * ((widest + kQK8_0 - 1) / kQK8_0));

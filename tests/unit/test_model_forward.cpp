@@ -69,7 +69,8 @@ TEST_CASE("forward is deterministic and reuses the arena", "[model][forward]") {
   const auto first = run(*model, tokens);
   const auto second = run(*model, tokens);
   CHECK(first == second);
-  CHECK(model->arena_capacity() == model->config().activation_bytes(32, 32));
+  CHECK(model->arena_capacity() ==
+        model->config().activation_bytes(32, 32, static_cast<std::size_t>(model->n_threads())));
 }
 
 TEST_CASE("the arena is sized exactly for max_seq", "[model][forward]") {
@@ -80,7 +81,9 @@ TEST_CASE("the arena is sized exactly for max_seq", "[model][forward]") {
     tokens[i] = static_cast<std::int32_t>((i * 37) % 512);
   }
   run(*model, tokens);
-  CHECK(model->arena_high_water() == model->config().activation_bytes(max_seq, max_seq));
+  CHECK(model->arena_high_water() ==
+        model->config().activation_bytes(max_seq, max_seq,
+                                         static_cast<std::size_t>(model->n_threads())));
   CHECK(model->arena_high_water() == model->arena_capacity());
 }
 

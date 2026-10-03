@@ -128,11 +128,12 @@ std::string LlamaConfig::describe() const {
                      tie_embeddings ? " tied" : "", attn_bias ? " qkv-bias" : "");
 }
 
-std::size_t LlamaConfig::activation_bytes(std::size_t max_seq, std::size_t max_ctx) const {
+std::size_t LlamaConfig::activation_bytes(std::size_t max_seq, std::size_t max_ctx,
+                                          std::size_t n_threads) const {
   SizeCounter uncached;
-  allocate_activations(uncached, *this, max_seq, max_seq, true);
+  allocate_activations(uncached, *this, max_seq, max_seq, true, n_threads);
   SizeCounter cached;
-  allocate_activations(cached, *this, max_seq, max_ctx, false);
+  allocate_activations(cached, *this, max_seq, max_ctx, false, n_threads);
   return uncached.total > cached.total ? uncached.total : cached.total;
 }
 

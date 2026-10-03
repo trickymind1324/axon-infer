@@ -23,6 +23,7 @@ struct Options {
   std::size_t chunk_size = 512;
   std::size_t max_seq = 128;
   bool exact_activations = false;
+  int threads = 0;
   bool json = false;
 };
 
@@ -38,6 +39,8 @@ int run(int argc, char** argv) {
   app.add_option("--max-seq", opt.max_seq, "tokens per forward call")->default_val(128);
   app.add_flag("--exact-activations", opt.exact_activations,
                "keep activations in float for quantized weights instead of Q8_0 blocks");
+  app.add_option("--threads,-t", opt.threads, "threads for the forward pass, 0 for one per core")
+      ->default_val(0);
   app.add_flag("--json", opt.json, "print one JSON object instead of text");
   CLI11_PARSE(app, argc, argv);
 
@@ -52,7 +55,8 @@ int run(int argc, char** argv) {
   auto loaded =
       axon::model::LlamaModel::load(opt.model, {.max_seq = std::min(opt.max_seq, opt.chunk_size),
                                                 .max_ctx = opt.chunk_size,
-                                                .exact_activations = opt.exact_activations});
+                                                .exact_activations = opt.exact_activations,
+                                                .n_threads = opt.threads});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;

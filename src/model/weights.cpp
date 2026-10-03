@@ -54,7 +54,16 @@ Expected<Tensor> bind_tensor(const GGUFFile& file, const std::string& name, Kind
     break;
   }
   }
-  return Tensor{.data = info->data, .type = info->dtype, .ne0 = ne0, .ne1 = ne1};
+  const auto bytes = row_bytes(info->dtype, ne0);
+  if (!bytes) {
+    return make_error(bytes.error().code, fmt::format("{}: {}", name, bytes.error().message));
+  }
+  return Tensor{.data = info->data,
+                .type = info->dtype,
+                .ne0 = ne0,
+                .ne1 = ne1,
+                .row_bytes = *bytes,
+                .total_bytes = *bytes * static_cast<std::size_t>(ne1)};
 }
 
 }  // namespace
