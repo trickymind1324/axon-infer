@@ -92,7 +92,7 @@ TEST_CASE("Q6_K matmul dequantizes super-blocks", "[kernels][quant]") {
   CHECK(axon::test::max_abs_diff(y, axon::test::load_axt("matmul_q6_k.y", "quant").as_f32()) <
         1e-3F);
   const auto xs = axon::test::load_axt("matmul_q6_k.xs", "quant").as_f32();
-  std::vector<float> ys(3 * 5);
+  std::vector<float> ys(std::size_t{3} * 5);
   k().matmul_q6_k_rows(w.data(), xs.data(), ys.data(), 3, 5, 256);
   CHECK(axon::test::max_abs_diff(ys, axon::test::load_axt("matmul_q6_k.ys", "quant").as_f32()) <
         1e-3F);
