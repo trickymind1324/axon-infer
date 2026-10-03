@@ -23,14 +23,17 @@ float dot(const float* a, const float* b, std::size_t n) {
 // keys arrive all at once or one position at a time, which is what makes cached decoding
 // bit-identical to the full-sequence pass. Quadratic and unapologetically so: this is the
 // baseline the blocked versions are measured against.
-void attention_kv(const float* q, const float* k_cache, const float* v_cache, float* out,
-                  float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
-                  std::size_t n_head_kv, std::size_t head_dim, float scale) {
+void attention_kv_heads(const float* q, const float* k_cache, const float* v_cache, float* out,
+                        float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                        std::size_t n_head_kv, std::size_t head_dim, float scale,
+                        std::size_t head_begin, std::size_t head_end) {
   AXON_DCHECK(n_head_kv > 0 && n_head % n_head_kv == 0, "attention: {} heads over {} kv heads",
               n_head, n_head_kv);
+  AXON_DCHECK(head_begin <= head_end && head_end <= n_head, "attention: heads [{}, {}) of {}",
+              head_begin, head_end, n_head);
   const std::size_t group = n_head / n_head_kv;
   const std::size_t total = n_past + n_q;
-  for (std::size_t h = 0; h < n_head; ++h) {
+  for (std::size_t h = head_begin; h < head_end; ++h) {
     const std::size_t kv_head = h / group;
     for (std::size_t i = 0; i < n_q; ++i) {
       const std::size_t pos = n_past + i;
@@ -52,6 +55,13 @@ void attention_kv(const float* q, const float* k_cache, const float* v_cache, fl
       }
     }
   }
+}
+
+void attention_kv(const float* q, const float* k_cache, const float* v_cache, float* out,
+                  float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                  std::size_t n_head_kv, std::size_t head_dim, float scale) {
+  attention_kv_heads(q, k_cache, v_cache, out, scores, n_q, n_past, n_head, n_head_kv, head_dim,
+                     scale, 0, n_head);
 }
 
 void attention(const float* q, const float* k, const float* v, float* out, float* scores,

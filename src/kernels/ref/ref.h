@@ -32,6 +32,10 @@ void attention(const float* q, const float* k, const float* v, float* out, float
 void attention_kv(const float* q, const float* k_cache, const float* v_cache, float* out,
                   float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
                   std::size_t n_head_kv, std::size_t head_dim, float scale);
+void attention_kv_heads(const float* q, const float* k_cache, const float* v_cache, float* out,
+                        float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                        std::size_t n_head_kv, std::size_t head_dim, float scale,
+                        std::size_t head_begin, std::size_t head_end);
 
 void matmul_q8_0(const BlockQ8_0* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
 void matmul_q4_0(const BlockQ4_0* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);

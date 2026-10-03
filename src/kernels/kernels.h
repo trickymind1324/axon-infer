@@ -69,6 +69,12 @@ struct KernelTable {
   void (*attention_kv)(const float* q, const float* k_cache, const float* v_cache, float* out,
                        float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
                        std::size_t n_head_kv, std::size_t head_dim, float scale);
+  // The same over heads [head_begin, head_end) only, so threads can split the heads with a
+  // score scratch each. attention_kv is this with the full range.
+  void (*attention_kv_heads)(const float* q, const float* k_cache, const float* v_cache, float* out,
+                             float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                             std::size_t n_head_kv, std::size_t head_dim, float scale,
+                             std::size_t head_begin, std::size_t head_end);
 
   // Quantized weights, F32 activations: y[o] = sum_i dequant(w[o][i]) * x[i], sequential in
   // float. n_in is a multiple of 32.

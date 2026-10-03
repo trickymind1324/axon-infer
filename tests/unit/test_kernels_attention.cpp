@@ -183,3 +183,28 @@ TEST_CASE("attention_kv over a growing cache is bit-identical to the full pass",
     CHECK(out == full);
   }
 }
+
+TEST_CASE("attention over head ranges composes to the full result", "[kernels][attention]") {
+  const Shape& s = kShapes[0];  // 4 heads, 2 kv heads
+  const std::string base = s.name;
+  const auto q = axon::test::load_axt(base + ".q").as_f32();
+  const auto key = axon::test::load_axt(base + ".k").as_f32();
+  const auto v = axon::test::load_axt(base + ".v").as_f32();
+  std::vector<float> full(q.size());
+  std::vector<float> scores(s.seq * s.seq);
+  k().attention_kv(q.data(), key.data(), v.data(), full.data(), scores.data(), s.seq, 0, s.n_head,
+                   s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim));
+  std::vector<float> parts(q.size(), -1.0F);
+  std::vector<float> scratch_a(s.seq * s.seq);
+  std::vector<float> scratch_b(s.seq * s.seq);
+  k().attention_kv_heads(q.data(), key.data(), v.data(), parts.data(), scratch_a.data(), s.seq, 0,
+                         s.n_head, s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim), 0, 1);
+  k().attention_kv_heads(q.data(), key.data(), v.data(), parts.data(), scratch_b.data(), s.seq, 0,
+                         s.n_head, s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim), 1, 4);
+  CHECK(parts == full);
+  // An empty range writes nothing.
+  std::vector<float> untouched(q.size(), 7.0F);
+  k().attention_kv_heads(q.data(), key.data(), v.data(), untouched.data(), scratch_a.data(), s.seq,
+                         0, s.n_head, s.n_head_kv, s.head_dim, inv_sqrt(s.head_dim), 2, 2);
+  CHECK(untouched == std::vector<float>(q.size(), 7.0F));
+}
