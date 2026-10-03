@@ -66,7 +66,8 @@ TEST_CASE("quantized synthetic models stay close to the F32 model", "[model][qua
     float bound;  // fraction of the logit range
   };
   for (const auto& c : {Case{.file = "synthetic-2l-q8_0.gguf", .bound = 0.02F},
-                        Case{.file = "synthetic-2l-q4_0.gguf", .bound = 0.15F}}) {
+                        Case{.file = "synthetic-2l-q4_0.gguf", .bound = 0.15F},
+                        Case{.file = "synthetic-2l-q4_1.gguf", .bound = 0.15F}}) {
     for (const bool exact : {false, true}) {
       auto model = load(c.file, exact);
       const auto got = forward(*model, tokens);
@@ -100,7 +101,8 @@ TEST_CASE("the two activation paths are each deterministic and differ only by no
 TEST_CASE("cached decoding on a quantized model is bit-identical to the full pass",
           "[model][quant]") {
   const auto tokens = axon::test::load_axt("synthetic-2l.tokens", "model").as_i32();
-  for (const char* file : {"synthetic-2l-q8_0.gguf", "synthetic-2l-q4_0.gguf"}) {
+  for (const char* file :
+       {"synthetic-2l-q8_0.gguf", "synthetic-2l-q4_0.gguf", "synthetic-2l-q4_1.gguf"}) {
     auto model = load(file);
     const auto full = forward(*model, tokens);
     auto cache = model->new_cache();

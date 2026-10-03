@@ -25,7 +25,7 @@ constexpr DTypeInfo kTypes[] = {
      .name = "Q4_1",
      .block_size = 32,
      .type_size = 20,
-     .compute_supported = false},
+     .compute_supported = true},
     {.type = DType::Q5_0,
      .name = "Q5_0",
      .block_size = 32,
@@ -70,7 +70,7 @@ constexpr DTypeInfo kTypes[] = {
      .name = "Q6_K",
      .block_size = 256,
      .type_size = 210,
-     .compute_supported = false},
+     .compute_supported = true},
     {.type = DType::Q8_K,
      .name = "Q8_K",
      .block_size = 256,
@@ -297,6 +297,41 @@ void dequantize_block_q4_0(const BlockQ4_0& block, float* out) {
   for (std::uint32_t i = 0; i < kQK4_0 / 2; ++i) {
     out[i] = static_cast<float>(static_cast<int>(block.qs[i] & 0x0F) - 8) * d;
     out[i + kQK4_0 / 2] = static_cast<float>(static_cast<int>(block.qs[i] >> 4) - 8) * d;
+  }
+}
+
+void dequantize_block_q4_1(const BlockQ4_1& block, float* out) {
+  const float d = fp16_to_fp32(block.d);
+  const float m = fp16_to_fp32(block.m);
+  for (std::uint32_t i = 0; i < kQK4_1 / 2; ++i) {
+    out[i] = static_cast<float>(block.qs[i] & 0x0F) * d + m;
+    out[i + kQK4_1 / 2] = static_cast<float>(block.qs[i] >> 4) * d + m;
+  }
+}
+
+// ggml's dequantize_row_q6_K, including its evaluation order (d * scale) * q.
+void dequantize_block_q6_k(const BlockQ6_K& block, float* out) {
+  const float d = fp16_to_fp32(block.d);
+  const std::uint8_t* ql = block.ql;
+  const std::uint8_t* qh = block.qh;
+  const std::int8_t* sc = block.scales;
+  float* y = out;
+  for (std::uint32_t n = 0; n < kQK_K; n += 128) {
+    for (std::uint32_t l = 0; l < 32; ++l) {
+      const std::uint32_t is = l / 16;
+      const int q1 = static_cast<int>((ql[l] & 0x0F) | ((qh[l] & 3) << 4)) - 32;
+      const int q2 = static_cast<int>((ql[l + 32] & 0x0F) | (((qh[l] >> 2) & 3) << 4)) - 32;
+      const int q3 = static_cast<int>((ql[l] >> 4) | (((qh[l] >> 4) & 3) << 4)) - 32;
+      const int q4 = static_cast<int>((ql[l + 32] >> 4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+      y[l] = d * static_cast<float>(sc[is]) * static_cast<float>(q1);
+      y[l + 32] = d * static_cast<float>(sc[is + 2]) * static_cast<float>(q2);
+      y[l + 64] = d * static_cast<float>(sc[is + 4]) * static_cast<float>(q3);
+      y[l + 96] = d * static_cast<float>(sc[is + 6]) * static_cast<float>(q4);
+    }
+    y += 128;
+    ql += 64;
+    qh += 32;
+    sc += 8;
   }
 }
 

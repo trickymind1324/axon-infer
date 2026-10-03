@@ -184,6 +184,7 @@ def main() -> None:
     write_synthetic(weights, None, "synthetic-2l.gguf")
     write_synthetic(weights, GGMLQuantizationType.Q8_0, "synthetic-2l-q8_0.gguf")
     write_synthetic(weights, GGMLQuantizationType.Q4_0, "synthetic-2l-q4_0.gguf")
+    write_synthetic(weights, GGMLQuantizationType.Q4_1, "synthetic-2l-q4_1.gguf")
     for f in sorted(OUT.glob("*.gguf")):
         print(f"{f.name:28s} {f.stat().st_size / 1024:8.1f} KB")
 

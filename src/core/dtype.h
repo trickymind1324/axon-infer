@@ -96,10 +96,32 @@ struct BlockQ4_0 {
 };
 static_assert(sizeof(BlockQ4_0) == 18);
 
+constexpr std::uint32_t kQK4_1 = 32;
+constexpr std::uint32_t kQK_K = 256;
+
+struct BlockQ4_1 {
+  std::uint16_t d;              // fp16 scale
+  std::uint16_t m;              // fp16 offset
+  std::uint8_t qs[kQK4_1 / 2];  // same nibble layout as Q4_0; value = nibble * d + m
+};
+static_assert(sizeof(BlockQ4_1) == 20);
+
+// 256 elements in sixteen groups of 16, each with an int8 scale, 6 bits per element split
+// into a low nibble (ql) and a high pair (qh); value = d * scale * (q - 32).
+struct BlockQ6_K {
+  std::uint8_t ql[kQK_K / 2];
+  std::uint8_t qh[kQK_K / 4];
+  std::int8_t scales[kQK_K / 16];
+  std::uint16_t d;  // fp16 super-block scale
+};
+static_assert(sizeof(BlockQ6_K) == 210);
+
 // Block conversions with the exact ggml formulas. Q8_0: value = q * d. Q4_0: value =
 // (nibble - 8) * d, low nibbles are elements 0..15 and high nibbles 16..31.
 void dequantize_block_q8_0(const BlockQ8_0& block, float* out);  // 32 floats
 void dequantize_block_q4_0(const BlockQ4_0& block, float* out);
+void dequantize_block_q4_1(const BlockQ4_1& block, float* out);  // 32 floats
+void dequantize_block_q6_k(const BlockQ6_K& block, float* out);  // 256 floats
 // Activation quantization as ggml's quantize_row_q8_0: per block of 32, d = max|x| / 127 and
 // q = round(x / d) with ties away from zero. A block of zeros gets d = 0 and all-zero q.
 // n must be a multiple of 32.

@@ -36,18 +36,23 @@ Expected<Tensor> bind_tensor(const GGUFFile& file, const std::string& name, Kind
                                                             name, dtype_name(info->dtype)));
     }
     break;
-  case Kind::Matmul:
+  case Kind::Matmul: {
+    const bool block32 =
+        info->dtype == DType::Q8_0 || info->dtype == DType::Q4_0 || info->dtype == DType::Q4_1;
+    const bool block256 = info->dtype == DType::Q6_K;
     if (info->dtype != DType::F32 && info->dtype != DType::F16 && info->dtype != DType::BF16 &&
-        info->dtype != DType::Q8_0 && info->dtype != DType::Q4_0) {
+        !block32 && !block256) {
       return make_error(ErrorCode::Unsupported,
                         fmt::format("{}: dtype {} has no kernels", name, dtype_name(info->dtype)));
     }
-    if ((info->dtype == DType::Q8_0 || info->dtype == DType::Q4_0) && ne0 % kQK8_0 != 0) {
+    const std::uint64_t block = block32 ? kQK8_0 : block256 ? kQK_K : 1;
+    if (ne0 % block != 0) {
       return make_error(ErrorCode::InvalidArgument,
-                        fmt::format("{}: quantized rows need a multiple of {} elements, found {}",
-                                    name, kQK8_0, ne0));
+                        fmt::format("{}: {} rows need a multiple of {} elements, found {}", name,
+                                    dtype_name(info->dtype), block, ne0));
     }
     break;
+  }
   }
   return Tensor{.data = info->data, .type = info->dtype, .ne0 = ne0, .ne1 = ne1};
 }

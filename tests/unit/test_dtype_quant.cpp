@@ -39,6 +39,23 @@ TEST_CASE("dequantizing Q8_0 and Q4_0 blocks matches the gguf package", "[core][
     axon::dequantize_block_q4_0(q4[b], got4.data() + b * 32);
   }
   CHECK(got4 == expected4);
+
+  const auto q41 = blocks_of<axon::BlockQ4_1>("row.q4_1.bin");
+  const auto expected41 = axon::test::load_axt("row.q4_1.dequant", "quant").as_f32();
+  std::vector<float> got41(expected41.size());
+  for (std::size_t b = 0; b < q41.size(); ++b) {
+    axon::dequantize_block_q4_1(q41[b], got41.data() + b * 32);
+  }
+  CHECK(got41 == expected41);
+
+  const auto q6 = blocks_of<axon::BlockQ6_K>("row.q6_k.bin");
+  const auto expected6 = axon::test::load_axt("row.q6_k.dequant", "quant").as_f32();
+  REQUIRE(q6.size() * 256 == expected6.size());
+  std::vector<float> got6(expected6.size());
+  for (std::size_t b = 0; b < q6.size(); ++b) {
+    axon::dequantize_block_q6_k(q6[b], got6.data() + b * 256);
+  }
+  CHECK(got6 == expected6);
 }
 
 TEST_CASE("quantizing a row to Q8_0 matches the gguf package bit for bit", "[core][quant]") {

@@ -53,12 +53,17 @@ def int_dot_reference(w_blocks: np.ndarray, x_blocks: np.ndarray, n_out: int, n_
         for b in range(nb):
             dw = wq[o, b, :2].view(np.float16)[0].astype(np.float64)
             dx = xq[b, :2].view(np.float16)[0].astype(np.float64)
+            x_ints = xq[b, 2:].view(np.int8).astype(np.int32)
             if wq.shape[-1] == 34:  # Q8_0
                 w_ints = wq[o, b, 2:].view(np.int8).astype(np.int32)
-            else:  # Q4_0: low nibbles are elements 0..15, high nibbles 16..31
+            elif wq.shape[-1] == 18:  # Q4_0: low nibbles are elements 0..15, high nibbles 16..31
                 nib = wq[o, b, 2:]
                 w_ints = np.concatenate([(nib & 0x0F).astype(np.int32) - 8, (nib >> 4).astype(np.int32) - 8])
-            x_ints = xq[b, 2:].view(np.int8).astype(np.int32)
+            else:  # Q4_1: unsigned nibbles with an offset m applied to the activation sum
+                m = wq[o, b, 2:4].view(np.float16)[0].astype(np.float64)
+                nib = wq[o, b, 4:]
+                w_ints = np.concatenate([(nib & 0x0F).astype(np.int32), (nib >> 4).astype(np.int32)])
+                acc += m * dx * float(x_ints.sum())
             acc += float(np.dot(w_ints, x_ints)) * dw * dx
         y[o] = acc
     return y
@@ -74,16 +79,23 @@ def main() -> None:
         rng.uniform(-1, 1, 128),
     ]).astype(np.float32)
     write_axt("row.f32", row)
-    for name, qtype in (("q8_0", GGMLQuantizationType.Q8_0), ("q4_0", GGMLQuantizationType.Q4_0)):
+    for name, qtype in (("q8_0", GGMLQuantizationType.Q8_0), ("q4_0", GGMLQuantizationType.Q4_0),
+                        ("q4_1", GGMLQuantizationType.Q4_1)):
         blocks = quantize(row, qtype)
         (OUT / f"row.{name}.bin").write_bytes(blocks.tobytes())
         write_axt(f"row.{name}.dequant", dequantize(blocks, qtype, row.shape))
+    # The package cannot quantize Q6_K, so random block bytes stand in: dequantization is still
+    # pinned exactly, and that is the only direction the engine needs.
+    q6 = rng.integers(0, 256, size=(2, 210), dtype=np.uint8)
+    (OUT / "row.q6_k.bin").write_bytes(q6.tobytes())
+    write_axt("row.q6_k.dequant", dequantize(q6, GGMLQuantizationType.Q6_K, (512,)))
 
     act = rng.normal(0, 3, 512).astype(np.float32)
     write_axt("act.f32", act)
     (OUT / "act.q8_0.bin").write_bytes(quantize(act, GGMLQuantizationType.Q8_0).tobytes())
 
-    for name, qtype in (("matmul_q8_0", GGMLQuantizationType.Q8_0), ("matmul_q4_0", GGMLQuantizationType.Q4_0)):
+    for name, qtype in (("matmul_q8_0", GGMLQuantizationType.Q8_0), ("matmul_q4_0", GGMLQuantizationType.Q4_0),
+                        ("matmul_q4_1", GGMLQuantizationType.Q4_1)):
         n_out, n_in = 7, 96
         w = rng.normal(0, 0.2, (n_out, n_in)).astype(np.float32)
         w_blocks = quantize(w, qtype)
@@ -103,11 +115,31 @@ def main() -> None:
 
     table = rng.normal(0, 1, (16, 64)).astype(np.float32)
     index = np.array([0, 5, 15], dtype=np.int32)
-    for name, qtype in (("embedding_q8_0", GGMLQuantizationType.Q8_0), ("embedding_q4_0", GGMLQuantizationType.Q4_0)):
+    for name, qtype in (("embedding_q8_0", GGMLQuantizationType.Q8_0), ("embedding_q4_0", GGMLQuantizationType.Q4_0),
+                        ("embedding_q4_1", GGMLQuantizationType.Q4_1)):
         blocks = quantize(table, qtype)
         (OUT / f"{name}.table.bin").write_bytes(blocks.tobytes())
         write_axt(f"{name}.index", index, I32)
         write_axt(f"{name}.rows", dequantize(blocks, qtype, table.shape)[index])
+    # Q6_K matmul and embedding from random super-blocks, n_in = 256.
+    # Random quants and scales with a small, fixed super-block scale, so values stay O(1)
+    # and float accumulation error stays far below the test tolerance.
+    d_small = np.frombuffer(np.float16(1e-3).tobytes(), dtype=np.uint8)
+    w6 = rng.integers(0, 256, size=(5, 210), dtype=np.uint8)  # [5][256]
+    w6[:, 208:210] = d_small
+    (OUT / "matmul_q6_k.w.bin").write_bytes(w6.tobytes())
+    w6_deq = dequantize(w6, GGMLQuantizationType.Q6_K, (5, 256))
+    x6 = rng.normal(0, 1, 256).astype(np.float32)
+    write_axt("matmul_q6_k.x", x6)
+    write_axt("matmul_q6_k.y", w6_deq @ x6.astype(np.float64))
+    xs6 = rng.normal(0, 1, (3, 256)).astype(np.float32)
+    write_axt("matmul_q6_k.xs", xs6)
+    write_axt("matmul_q6_k.ys", xs6.astype(np.float64) @ w6_deq.T)
+    t6 = rng.integers(0, 256, size=(4, 210), dtype=np.uint8)  # [4][256]
+    t6[:, 208:210] = d_small
+    (OUT / "embedding_q6_k.table.bin").write_bytes(t6.tobytes())
+    write_axt("embedding_q6_k.index", np.array([3, 0], dtype=np.int32), I32)
+    write_axt("embedding_q6_k.rows", dequantize(t6, GGMLQuantizationType.Q6_K, (4, 256))[[3, 0]])
     total = sum(f.stat().st_size for f in OUT.iterdir())
     print(f"{len(list(OUT.iterdir()))} fixtures, {total / 1024:.1f} KB")
 

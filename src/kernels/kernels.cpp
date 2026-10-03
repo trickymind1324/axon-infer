@@ -29,6 +29,12 @@ constexpr KernelTable kScalarTable{
     .matmul_q8_0_q8_rows = ref::matmul_q8_0_q8_rows,
     .matmul_q4_0_q8_rows = ref::matmul_q4_0_q8_rows,
     .quantize_row_q8_0 = ref::quantize_row_q8_0,
+    .matmul_q4_1 = ref::matmul_q4_1,
+    .matmul_q4_1_q8 = ref::matmul_q4_1_q8,
+    .matmul_q4_1_rows = ref::matmul_q4_1_rows,
+    .matmul_q4_1_q8_rows = ref::matmul_q4_1_q8_rows,
+    .matmul_q6_k = ref::matmul_q6_k,
+    .matmul_q6_k_rows = ref::matmul_q6_k_rows,
 };
 
 }  // namespace

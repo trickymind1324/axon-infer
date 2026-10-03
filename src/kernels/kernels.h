@@ -94,6 +94,23 @@ struct KernelTable {
                               std::size_t n_out, std::size_t n_in);
   // Activation quantization, one row of n floats (a multiple of 32) into n / 32 blocks.
   void (*quantize_row_q8_0)(const float* x, BlockQ8_0* out, std::size_t n);
+
+  // Q4_1 (scale and offset per block), both activation paths. With Q8_0 activations the offset
+  // contributes m * d_x * sum(q_x) per block.
+  void (*matmul_q4_1)(const BlockQ4_1* w, const float* x, float* y, std::size_t n_out,
+                      std::size_t n_in);
+  void (*matmul_q4_1_q8)(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
+                         std::size_t n_in);
+  void (*matmul_q4_1_rows)(const BlockQ4_1* w, const float* x, float* y, std::size_t n_rows,
+                           std::size_t n_out, std::size_t n_in);
+  void (*matmul_q4_1_q8_rows)(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                              std::size_t n_out, std::size_t n_in);
+  // Q6_K with float activations only: each 256-element super-block is dequantized and dotted.
+  // Used for output and embedding matrices, n_in a multiple of 256.
+  void (*matmul_q6_k)(const BlockQ6_K* w, const float* x, float* y, std::size_t n_out,
+                      std::size_t n_in);
+  void (*matmul_q6_k_rows)(const BlockQ6_K* w, const float* x, float* y, std::size_t n_rows,
+                           std::size_t n_out, std::size_t n_in);
 };
 
 // The table in use. Scalar until runtime dispatch lands.

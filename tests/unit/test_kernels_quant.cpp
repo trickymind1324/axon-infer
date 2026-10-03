@@ -70,8 +70,36 @@ TEST_CASE("quantized matmul with Q8_0 activations matches the integer reference"
   CHECK(std::memcmp(mine.data(), xq8.data(), mine.size() * sizeof(axon::BlockQ8_0)) == 0);
 }
 
+TEST_CASE("Q4_1 matmul matches on both activation paths", "[kernels][quant]") {
+  const auto w = blocks_of<axon::BlockQ4_1>("matmul_q4_1.w.bin");
+  const auto x = axon::test::load_axt("matmul_q4_1.x", "quant").as_f32();
+  std::vector<float> y(kOut);
+  k().matmul_q4_1(w.data(), x.data(), y.data(), kOut, kIn);
+  CHECK(axon::test::max_abs_diff(y, axon::test::load_axt("matmul_q4_1.y", "quant").as_f32()) <
+        1e-4F);
+  const auto xq = blocks_of<axon::BlockQ8_0>("matmul_q4_1.xq.bin");
+  k().matmul_q4_1_q8(w.data(), xq.data(), y.data(), kOut, kIn);
+  CHECK(axon::test::max_abs_diff(y, axon::test::load_axt("matmul_q4_1.yq", "quant").as_f32()) <
+        1e-5F);
+}
+
+TEST_CASE("Q6_K matmul dequantizes super-blocks", "[kernels][quant]") {
+  const auto w = blocks_of<axon::BlockQ6_K>("matmul_q6_k.w.bin");
+  REQUIRE(w.size() == 5);
+  const auto x = axon::test::load_axt("matmul_q6_k.x", "quant").as_f32();
+  std::vector<float> y(5);
+  k().matmul_q6_k(w.data(), x.data(), y.data(), 5, 256);
+  CHECK(axon::test::max_abs_diff(y, axon::test::load_axt("matmul_q6_k.y", "quant").as_f32()) <
+        1e-3F);
+  const auto xs = axon::test::load_axt("matmul_q6_k.xs", "quant").as_f32();
+  std::vector<float> ys(3 * 5);
+  k().matmul_q6_k_rows(w.data(), xs.data(), ys.data(), 3, 5, 256);
+  CHECK(axon::test::max_abs_diff(ys, axon::test::load_axt("matmul_q6_k.ys", "quant").as_f32()) <
+        1e-3F);
+}
+
 TEST_CASE("quantized row matmuls match for both activation paths", "[kernels][quant]") {
-  for (const char* name : {"matmul_q8_0", "matmul_q4_0"}) {
+  for (const char* name : {"matmul_q8_0", "matmul_q4_0", "matmul_q4_1"}) {
     const std::string base = name;
     const auto xs = axon::test::load_axt(base + ".xs", "quant").as_f32();
     const auto ys = axon::test::load_axt(base + ".ys", "quant").as_f32();
@@ -89,11 +117,17 @@ TEST_CASE("quantized row matmuls match for both activation paths", "[kernels][qu
       CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
       k().matmul_q8_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
       CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
-    } else {
+    } else if (base == "matmul_q4_0") {
       const auto w = blocks_of<axon::BlockQ4_0>(base + ".w.bin");
       k().matmul_q4_0_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn);
       CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
       k().matmul_q4_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
+      CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
+    } else {
+      const auto w = blocks_of<axon::BlockQ4_1>(base + ".w.bin");
+      k().matmul_q4_1_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn);
+      CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
+      k().matmul_q4_1_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
       CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
     }
   }
@@ -123,12 +157,14 @@ TEST_CASE("embedding rows dequantize Q8_0 and Q4_0 tables", "[kernels][quant]") 
     axon::DType type;
   };
   for (const auto& c : {Case{.name = "embedding_q8_0", .type = axon::DType::Q8_0},
-                        Case{.name = "embedding_q4_0", .type = axon::DType::Q4_0}}) {
+                        Case{.name = "embedding_q4_0", .type = axon::DType::Q4_0},
+                        Case{.name = "embedding_q4_1", .type = axon::DType::Q4_1},
+                        Case{.name = "embedding_q6_k", .type = axon::DType::Q6_K}}) {
     const std::string base = c.name;
     const auto table = axon::test::read_fixture("quant/" + base + ".table.bin");
     const auto index = axon::test::load_axt(base + ".index", "quant").as_i32();
     const auto expected = axon::test::load_axt(base + ".rows", "quant").as_f32();
-    const std::size_t n = 64;
+    const std::size_t n = c.type == axon::DType::Q6_K ? 256 : 64;
     std::vector<float> got(index.size() * n);
     for (std::size_t i = 0; i < index.size(); ++i) {
       k().embedding_row(c.type, table.data(), n, index[i], got.data() + i * n);

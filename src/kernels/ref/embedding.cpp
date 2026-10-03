@@ -44,6 +44,20 @@ void embedding_row(DType type, const void* table, std::size_t n, std::int64_t in
     }
     return;
   }
+  case DType::Q4_1: {
+    const BlockQ4_1* src = static_cast<const BlockQ4_1*>(table) + row * (n / kQK4_1);
+    for (std::size_t b = 0; b < n / kQK4_1; ++b) {
+      dequantize_block_q4_1(src[b], out + b * kQK4_1);
+    }
+    return;
+  }
+  case DType::Q6_K: {
+    const BlockQ6_K* src = static_cast<const BlockQ6_K*>(table) + row * (n / kQK_K);
+    for (std::size_t b = 0; b < n / kQK_K; ++b) {
+      dequantize_block_q6_k(src[b], out + b * kQK_K);
+    }
+    return;
+  }
   default:
     AXON_CHECK(false, "embedding_row: unsupported dtype {}", dtype_name(type));
   }

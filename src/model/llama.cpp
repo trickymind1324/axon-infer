@@ -51,6 +51,19 @@ void matmul_rows(const Tensor& w, const float* x, float* y, std::size_t n_rows,
                             n_in);
     }
     return;
+  case DType::Q4_1:
+    if (exact) {
+      k.matmul_q4_1_rows(static_cast<const BlockQ4_1*>(w.data), x, y, n_rows, n_out, n_in);
+    } else {
+      quantize_rows();
+      k.matmul_q4_1_q8_rows(static_cast<const BlockQ4_1*>(w.data), xq.data(), y, n_rows, n_out,
+                            n_in);
+    }
+    return;
+  case DType::Q6_K:
+    // Float activations only: the super-block format has no integer path yet.
+    k.matmul_q6_k_rows(static_cast<const BlockQ6_K*>(w.data), x, y, n_rows, n_out, n_in);
+    return;
   case DType::F32:
     k.matmul_f32_rows(static_cast<const float*>(w.data), x, y, n_rows, n_out, n_in);
     return;

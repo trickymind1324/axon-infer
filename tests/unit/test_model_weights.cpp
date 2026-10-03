@@ -74,15 +74,18 @@ TEST_CASE("binding the synthetic model", "[model][weights]") {
 }
 
 TEST_CASE("quantized weights bind with their block types", "[model][weights]") {
-  for (const char* name : {"synthetic-2l-q8_0.gguf", "synthetic-2l-q4_0.gguf"}) {
+  for (const char* name :
+       {"synthetic-2l-q8_0.gguf", "synthetic-2l-q4_0.gguf", "synthetic-2l-q4_1.gguf"}) {
     const auto file = open_fixture(name);
     const auto cfg = axon::model::LlamaConfig::from_gguf(file);
     REQUIRE(cfg);
     const auto w = axon::model::LlamaWeights::bind(file, *cfg);
     INFO(name);
     REQUIRE(w);
-    const auto expected =
-        std::string(name).find("q8_0") != std::string::npos ? axon::DType::Q8_0 : axon::DType::Q4_0;
+    const std::string n(name);
+    const auto expected = n.find("q8_0") != std::string::npos   ? axon::DType::Q8_0
+                          : n.find("q4_1") != std::string::npos ? axon::DType::Q4_1
+                                                                : axon::DType::Q4_0;
     CHECK(w->token_embd.type == expected);
     CHECK(w->layers[0].wq.type == expected);
     CHECK(w->layers[0].attn_norm.type == axon::DType::F32);
