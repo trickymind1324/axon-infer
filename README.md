@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![C++20](https://img.shields.io/badge/C%2B%2B-20-informational) ![Platform](https://img.shields.io/badge/platform-macOS%20arm64-lightgrey)
 
-LLM inference engine in C++20, built from scratch. It loads GGUF models from the LLaMA family and runs them on CPU with memory-mapped weights, a KV cache, a chat template renderer and a seeded sampler. No ggml, BLAS, OpenMP or other ML runtime. Every component is checked against a reference implementation, and every optimization is benchmarked so you can see what it buys.
+LLM inference engine in C++20, built from scratch. It loads GGUF models from the LLaMA family and runs them on CPU with memory-mapped weights, quantized matmuls, a KV cache, a chat template renderer and a seeded sampler. No ggml, BLAS, OpenMP or other ML runtime. Every component is checked against a reference implementation, and every optimization is benchmarked so you can see what it buys.
 
 ## Contents
 
@@ -24,17 +24,18 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** The kernels are scalar and single-threaded, so throughput is a few tokens per second on a 135M model. Quantized weights (Q8_0 and Q4_0) load and can be inspected but do not run yet. There is no HTTP server yet.
+**Current limitations.** The kernels are scalar and single-threaded, so throughput is a few tokens per second on a 135M model and about one token per second on a 1B model. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
 
 ## Features
 
 - **GGUF loader** over a read-only memory mapping, validating every offset and length before any accessor can be called, fuzzed with a deterministic corruption replay and a libFuzzer target.
 - **Tokenizers** built entirely from GGUF metadata: byte-level BPE with the GPT-2, Llama 3 and Qwen2 pre-tokenizer patterns, and SentencePiece BPE with byte fallback, plus NFC normalization and a streaming decoder that never emits a partial UTF-8 sequence.
 - **Forward pass** on a table of kernels with a scalar reference for each, activations from one arena sized at load, and no heap allocation per token.
+- **Quantized weights** in Q8_0, Q4_0, Q4_1 and Q6_K, dequantized inside the matmul, with activations quantized to Q8_0 blocks for an integer dot product or kept in float for comparison.
 - **KV cache** with prefill, single-token decode and truncation, bit-identical to the cache-free forward.
 - **Sampler** with temperature, top-k, top-p, min-p and a repetition penalty, on a seeded generator that reproduces across platforms.
 - **Chat** through the model's own Jinja template, rendered by a small interpreter with per-family fallbacks, reusing the cached prefix of the conversation across turns.
-- **Tools**: `axon` (chat, generate, tokenize), `axon-dump` for inspecting any GGUF file, benchmarks for kernels and the forward pass.
+- **Tools**: `axon` (chat, generate, tokenize), `axon-dump` for inspecting any GGUF file, `axon-perplexity` for scoring a model over a text, benchmarks for kernels and the forward pass.
 
 ## Supported models and formats
 
@@ -42,21 +43,20 @@ Architectures read from GGUF metadata:
 
 | Architecture | Config | Tokenizer | Forward pass | Verified against Hugging Face |
 |---|---|---|---|---|
-| `llama` (Llama 2, Llama 3.x, SmolLM2, TinyLlama) | ✅ | ✅ | ✅ | SmolLM2-135M: logits, greedy output, chat template |
-| `qwen2` (Qwen2.5) | ✅ | ✅ | ✅ (Q/K/V bias, NeoX rotary layout) | tokenizer and chat template |
+| `llama` (Llama 2, Llama 3.x, SmolLM2, TinyLlama) | ✅ | ✅ | ✅ | SmolLM2-135M: logits, greedy output, perplexity, chat template. TinyLlama and Llama 3.2 1B: chat |
+| `qwen2` (Qwen2.5) | ✅ | ✅ | ✅ (Q/K/V bias, NeoX rotary layout) | tokenizer, chat template, chat |
 
 Weight formats:
 
-| Format | Load and inspect | Run |
-|---|---|---|
-| F32 | ✅ | ✅ |
-| F16 | ✅ | ✅ |
-| BF16 | ✅ | ✅ |
-| Q8_0 | ✅ | not yet |
-| Q4_0 | ✅ | not yet |
-| K-quants and others | ✅ (dump only) | no |
+| Format | Load and inspect | Run | Activation path |
+|---|---|---|---|
+| F32, F16, BF16 | ✅ | ✅ | float |
+| Q8_0 | ✅ | ✅ | Q8_0 integer dot, or float with `--exact-activations` |
+| Q4_0, Q4_1 | ✅ | ✅ | Q8_0 integer dot, or float with `--exact-activations` |
+| Q6_K | ✅ | ✅ | float (used by llama.cpp for output and embedding matrices in Q4_0 files) |
+| Other K-quants and IQ formats | ✅ (dump only) | no | |
 
-Models exercised by the test suite: SmolLM2-135M-Instruct (F16, Q8_0, Q4_0), TinyLlama-1.1B-Chat (Q4_0), Llama-3.2-1B-Instruct (Q4_0) and Qwen2.5-0.5B-Instruct (Q4_0). Chat runs on SmolLM2 today, and the other three join once quantized kernels land.
+Models exercised by the test suite: SmolLM2-135M-Instruct (F16, Q8_0, Q4_0), TinyLlama-1.1B-Chat (Q4_0), Llama-3.2-1B-Instruct (Q4_0) and Qwen2.5-0.5B-Instruct (Q4_0). All four chat. The "Q4_0" files published for these models also contain Q4_1, Q8_0 and Q6_K tensors, which is why those formats are supported.
 
 Platforms: developed and benchmarked on macOS arm64 (Apple M1). The code is portable C++20 with no platform-specific kernels yet, and Linux x86-64 builds are untested.
 
@@ -122,6 +122,31 @@ prompt 5 tokens (0 reused), first token in 1.24 s, decode 20 tokens in 4.65 s (4
 
 `--ctx` sets the cache length (default 2048, clamped to the model's training context). `--no-cache` recomputes the whole sequence each step, which is the reference path and the one that can dump activations with `--dump-layer N --dump-dir D`.
 
+```
+$ ./build/release/apps/axon/axon chat -m models/Llama-3.2-1B-Instruct-Q4_0.gguf --temp 0
+> What is the capital of France? Answer in one sentence.
+The capital of France is Paris.
+> And Italy?
+The capital of Italy is Rome.
+```
+
+### Perplexity
+
+`axon-perplexity` scores a model over a text the way llama.cpp's perplexity tool does: the text is cut into chunks of 512 tokens, each chunk is one prefill, and the second half of every chunk is scored with the first half as context. The default text is a committed head of the WikiText-2 raw test split, so the tool works from a clean clone:
+
+```
+$ ./build/release/apps/axon-perplexity/axon-perplexity -m models/SmolLM2-135M-Instruct-Q8_0.gguf --chunks 4
+model: Smollm2 135M 8k Lc100K Mix1 Ep2 (llama layers 30 embd 576 heads 9 kv 3 ff 1536 vocab 49152 ctx 8192 rope normal 100000 tied)
+text: 240000 bytes, 57379 tokens, chunks of 512
+[1] 10.3831
+[2] 17.1137
+[3] 18.3842
+[4] 17.7097
+perplexity 17.7097 over 1024 scored tokens in 4 chunks, 35.5 s
+```
+
+`--chunks` limits the run, `--exact-activations` keeps activations in float for quantized weights, and `--json` prints one object for scripts.
+
 ### Tokenize
 
 `axon tokenize` encodes text with a model's tokenizer and shows every token:
@@ -163,6 +188,8 @@ Every component is checked against an independent reference. The small fixtures 
 | Kernels | NumPy in float64, with PyTorch pinning the RoPE and attention conventions | fixture tests per kernel plus property tests |
 | Forward pass | NumPy on a synthetic two-layer model, and Hugging Face `LlamaForCausalLM` loaded from the same GGUF file for SmolLM2-135M | argmax matches at every position of ten prompts, logits agree to better than 5e-5 on a range of about 46, and 20-token greedy continuations match |
 | KV cache | the cache-free forward | cached decoding is bit-identical at every position, however the tokens are split between prefill chunks and single steps |
+| Quantization | the `gguf` package's quantizer, which is bit-exact with ggml | dequantization of every supported block format and activation quantization match bit for bit, and the integer-dot kernels match an integer reference |
+| Perplexity | Hugging Face on the same GGUF file, dequantized to float | matches to 0.1 percent on F16 and, with Q8_0 activations, to 0.5 percent on Q8_0 and Q4_0 |
 | Chat templates | Hugging Face `apply_chat_template` | twelve renders across four model families match byte for byte |
 | Sampler | closed-form expectations | top-k and top-p bounds, temperature zero equals argmax, seeded reproducibility, and draw frequencies within two percent |
 
@@ -201,6 +228,29 @@ Scalar matmul, the kernel that dominates decode:
 | F16 | 8192 x 2048 | 1.1 | 1.1 |
 
 The F16 path is half the speed of F32 because every element goes through a scalar half-to-float conversion. That is the expected shape of a reference implementation and the first target for SIMD work.
+
+Quantized matmul, 2048 x 2048, dequantizing inside the kernel:
+
+| Weights | Activations | GFLOP/s | GB/s of weights |
+|---|---|---|---|
+| Q8_0 | float | 1.6 | 0.8 |
+| Q8_0 | Q8_0 integer dot | 17.9 | 9.5 |
+| Q4_0 | float | 1.5 | 0.4 |
+| Q4_0 | Q8_0 integer dot | 14.5 | 4.1 |
+
+The integer path is ten times faster than the float path in the same scalar source, because the compiler vectorizes the int8 inner loop on its own. It is the default for quantized weights and the path the SIMD work builds on.
+
+### Quantization accuracy
+
+Measured on SmolLM2-135M-Instruct against its F16 file, over the ten prompt fixtures and the first four WikiText-2 chunks. The Hugging Face column runs the same dequantized weights in float, so the gap between it and the engine is the cost of quantizing activations to Q8_0 blocks, and the gap between rows is the cost of the weight format itself.
+
+| File | Argmax agreement with F16 | Perplexity (engine) | Perplexity (Hugging Face, dequantized) | Delta from F16 |
+|---|---|---|---|---|
+| F16 | | 17.652 | 17.652 | |
+| Q8_0 | 95.2% | 17.710 | 17.665 | +0.06 |
+| Q4_0 | 77.9% | 20.185 | 20.194 | +2.53 |
+
+A 135M model loses a lot to Q4_0. That is a property of the model and the format, reproduced by Hugging Face on the same weights, not of the engine. Larger models lose far less, and the perplexity tool makes the trade-off measurable for any file.
 
 ## Design notes
 
@@ -246,7 +296,7 @@ Presets: `debug`, `release`, `release-native` (adds `-march=native`), `asan-ubsa
 
 Dependencies are fetched by CMake at configure time: fmt, CLI11, Catch2 (tests), Google Benchmark (bench). Nothing else.
 
-Tests that need real model files are opt-in: run `scripts/download_models.sh`, then `AXON_MODELS_DIR=$PWD/models ctest --preset release -L integration` (an absolute path, because ctest runs from the build tree). Without the variable they are skipped. The SmolLM2 integration tests take about four minutes on the scalar path.
+Tests that need real model files are opt-in: run `scripts/download_models.sh`, then `AXON_MODELS_DIR=$PWD/models ctest --preset release -L integration` (an absolute path, because ctest runs from the build tree). Without the variable they are skipped. The integration tests take about fifteen minutes on the scalar path, most of it the F16 perplexity pass.
 
 Fixtures under `tests/reference/fixtures/` are generated by the Python scripts next to them and are small enough to commit:
 
@@ -255,6 +305,8 @@ Fixtures under `tests/reference/fixtures/` are generated by the Python scripts n
 - Kernel fixtures are `.axt` tensors (a 4-byte magic, dims, dtype, raw data) written by NumPy in float64.
 - Model fixtures are a NumPy forward over the synthetic model, and for SmolLM2 the Hugging Face argmax per position, last-position logits and greedy continuations. The full per-position logits stay in the gitignored `tests/reference/local/` and are checked when `AXON_LOCAL_FIXTURES` points there.
 - Chat template fixtures are the Hugging Face `apply_chat_template` output for three conversations per family, produced from the tokenizers alone.
+- Quantization fixtures are rows and small matrices quantized by the `gguf` package, with its dequantized values alongside.
+- The perplexity text is the head of the WikiText-2 raw test split (Merity et al., "Pointer Sentinel Mixture Models", 2016, CC BY-SA 3.0), written by `scripts/make_perplexity_fixture.py`, with Hugging Face reference numbers for the SmolLM2 files from `tests/reference/gen_perplexity_reference.py`.
 
 To add a kernel: declare it in `src/kernels/kernels.h` and `src/kernels/ref/ref.h`, implement the scalar version under `src/kernels/ref/`, register it in the table in `src/kernels/kernels.cpp`, add its reference to the generator and regenerate, then write a fixture test plus at least one property test under `tests/unit/`.
 
