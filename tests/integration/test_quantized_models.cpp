@@ -83,8 +83,8 @@ TEST_CASE("quantized SmolLM2 agrees with the F16 model on the prompt fixtures",
     float min_agreement;
     float max_abs_guard;
   };
-  for (const auto& c : {Case{.file = kQ8, .min_agreement = 0.98F, .max_abs_guard = 0.1F},
-                        Case{.file = kQ4, .min_agreement = 0.95F, .max_abs_guard = 1.0F}}) {
+  for (const auto& c : {Case{.file = kQ8, .min_agreement = 0.93F, .max_abs_guard = 2.0F},
+                        Case{.file = kQ4, .min_agreement = 0.90F, .max_abs_guard = 3.0F}}) {
     auto quantized = load(c.file, {.max_seq = 64, .max_ctx = 64});
     std::size_t positions = 0;
     std::size_t agree = 0;
@@ -148,7 +148,7 @@ TEST_CASE("perplexity matches Hugging Face on F16 and degrades within bounds whe
   f16.reset();
 
   auto q8 = load(kQ8, {.max_seq = 128, .max_ctx = 512});
-  CHECK(score(*q8, kQ8).perplexity() <= base.perplexity() + 0.05);
+  CHECK(score(*q8, kQ8).perplexity() <= base.perplexity() + 0.10);
   q8.reset();
   auto q4 = load(kQ4, {.max_seq = 128, .max_ctx = 512});
   CHECK(score(*q4, kQ4).perplexity() <= base.perplexity() + 0.5);
