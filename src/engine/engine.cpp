@@ -89,7 +89,9 @@ Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& op
 
   const Tokenizer& tokenizer = model_.tokenizer();
   const auto stops = opts.stop_tokens.empty() ? tokenizer.eog_tokens() : opts.stop_tokens;
-  const auto is_stop = [&](std::int32_t id) { return std::ranges::find(stops, id) != stops.end(); };
+  const auto is_stop = [&](std::int32_t id) {
+    return opts.stop_on_tokens && std::ranges::find(stops, id) != stops.end();
+  };
   const std::size_t n_vocab = model_.config().n_vocab;
   const auto last_row = [&](std::span<const float> logits) { return logits.last(n_vocab); };
 

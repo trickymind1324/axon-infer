@@ -75,8 +75,7 @@ TEST_CASE("greedy generation through the engine matches the cache-free loop", "[
 
   axon::engine::Engine engine(*model);
   auto opts = greedy(12);
-  const std::vector<std::int32_t> none;  // no stop tokens so the run always reaches 12
-  opts.stop_tokens = std::span<const std::int32_t>(none).first(0);
+  opts.stop_on_tokens = false;  // the run must always reach 12
   std::string text;
   const auto got = run(engine, prompt, opts, &text);
   CHECK(got == expected);
@@ -168,8 +167,7 @@ TEST_CASE("a full context stops generation and is reported", "[engine]") {
   const std::vector<std::int32_t> prompt(tokens.begin(), tokens.begin() + 10);
   axon::engine::Engine engine(*model);
   auto opts = greedy(50);
-  const std::vector<std::int32_t> none;
-  opts.stop_tokens = std::span<const std::int32_t>(none).first(0);
+  opts.stop_on_tokens = false;
   const auto got = run(engine, prompt, opts);
   CHECK(engine.stats().context_full);
   CHECK(got.size() == 16 - 10 + 1);  // one token per cache slot, plus the one never fed
@@ -207,8 +205,7 @@ TEST_CASE("seeded sampling is reproducible through the engine", "[engine]") {
   opts.sampler.top_p = 1.0F;
   opts.sampler.min_p = 0.0F;
   opts.sampler.seed = 1234;
-  const std::vector<std::int32_t> none;
-  opts.stop_tokens = std::span<const std::int32_t>(none).first(0);
+  opts.stop_on_tokens = false;
   axon::engine::Engine a(*model);
   axon::engine::Engine b(*model);
   const auto from_a = run(a, prompt, opts);

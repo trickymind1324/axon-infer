@@ -24,6 +24,8 @@ struct GenerateOptions {
   SamplerConfig sampler;
   // Ends generation when sampled. Empty means the tokenizer's end-of-generation tokens.
   std::span<const std::int32_t> stop_tokens;
+  // False ignores stop tokens entirely and always produces max_tokens, for benchmarks.
+  bool stop_on_tokens = true;
 };
 
 struct Stats {

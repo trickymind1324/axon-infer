@@ -6,6 +6,7 @@
 #include "core/log.h"
 
 #include "chat/template.h"
+#include "engine/bench.h"
 #include "engine/engine.h"
 #include "model/llama.h"
 
@@ -19,6 +20,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <optional>
@@ -399,6 +401,81 @@ int run_chat(const ChatCli& opt) {
   return 0;
 }
 
+// --- bench --------------------------------------------------------------------------------
+
+struct BenchCli {
+  std::string model;
+  std::string text = AXON_BENCH_TEXT;
+  std::size_t prompt_tokens = 512;
+  int generate = 128;
+  int runs = 5;
+  std::size_t ctx = 2048;
+  std::size_t max_seq = 128;
+  int threads = 0;
+  bool json = false;
+};
+
+// The methodology every published number follows: a fixed prompt cut from the committed text,
+// one warm-up, the median of repeated runs, bytes per token alongside tokens per second.
+int run_bench(const BenchCli& opt) {
+  std::ifstream in(opt.text, std::ios::binary);
+  if (!in) {
+    fmt::print(stderr, "error: cannot open {}\n", opt.text);
+    return 2;
+  }
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  auto loaded = axon::model::LlamaModel::load(
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, opt.ctx), .max_ctx = opt.ctx, .n_threads = opt.threads});
+  if (!loaded) {
+    fmt::print(stderr, "error: {}\n", loaded.error().message);
+    return 2;
+  }
+  auto& model = **loaded;
+  auto ids = model.tokenizer().encode(text, {.add_bos = std::nullopt, .parse_special = false});
+  if (ids.size() < opt.prompt_tokens) {
+    fmt::print(stderr, "error: the text has only {} tokens, fewer than the {} requested\n",
+               ids.size(), opt.prompt_tokens);
+    return 2;
+  }
+  ids.resize(opt.prompt_tokens);
+  if (!opt.json) {
+    fmt::print("model: {} ({}), {} threads, context {}\n", model.file().model_name(),
+               model.config().describe(), model.n_threads(), model.max_ctx());
+    fmt::print("prompt {} tokens, generate {}, {} runs after one warm-up\n", ids.size(),
+               opt.generate, opt.runs);
+  }
+  const auto result = axon::engine::run_benchmark(
+      model, ids, {.generate = opt.generate, .runs = opt.runs},
+      [&](const axon::engine::BenchRun& run, int index) {
+        if (!opt.json) {
+          fmt::print("run {}: prefill {:.2f} s ({:.2f} tok/s), decode {:.2f} s ({:.2f} tok/s)\n",
+                     index + 1, run.prefill_s, static_cast<double>(ids.size()) / run.prefill_s,
+                     run.decode_s, static_cast<double>(opt.generate) / run.decode_s);
+          std::fflush(stdout);
+        }
+      });
+  if (!result) {
+    fmt::print(stderr, "error: {}\n", result.error().message);
+    return 2;
+  }
+  if (opt.json) {
+    fmt::print("{}\n", axon::engine::bench_json(*result, opt.model, model.config().describe()));
+    return 0;
+  }
+  fmt::print(
+      "prefill {:.2f} tok/s median ({:.2f} best), decode {:.2f} tok/s median ({:.2f} best)\n",
+      result->prefill_tok_s_median, result->prefill_tok_s_best, result->decode_tok_s_median,
+      result->decode_tok_s_best);
+  fmt::print(
+      "weights {:.1f} MB per token, cache {:.1f} MB per token on average, {:.2f} GB/s of "
+      "weights at the median, peak rss {:.0f} MB, load average {:.2f} before and {:.2f} after\n",
+      static_cast<double>(result->weight_bytes_per_token) / 1e6,
+      result->cache_bytes_per_token / 1e6, result->weight_gb_s_median, result->peak_rss_mb,
+      result->load_average_before, result->load_average_after);
+  return 0;
+}
+
 // --- main ---------------------------------------------------------------------------------
 
 int run(int argc, char** argv) {
@@ -454,6 +531,21 @@ int run(int argc, char** argv) {
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
   add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 
+  BenchCli bench;
+  auto* be = app.add_subcommand("bench",
+                                "measure prefill and decode throughput with the published method");
+  be->add_option("--model,-m", bench.model, "path to a .gguf file")->required();
+  be->add_option("--text", bench.text,
+                 "text the prompt is cut from (default: the committed WikiText-2 head)");
+  be->add_option("--prompt-tokens", bench.prompt_tokens, "prompt length in tokens")
+      ->default_val(512);
+  be->add_option("--generate,-n", bench.generate, "tokens to decode per run")->default_val(128);
+  be->add_option("--runs", bench.runs, "measured runs after one warm-up")->default_val(5);
+  be->add_option("--ctx", bench.ctx, "key/value cache length")->default_val(2048);
+  be->add_option("--max-seq", bench.max_seq, "tokens per forward call")->default_val(128);
+  be->add_option("--threads,-t", bench.threads, "threads for the forward pass, 0 for one per core")
+      ->default_val(0);
+  be->add_flag("--json", bench.json, "print one JSON object");
   app.require_subcommand(0, 1);
   CLI11_PARSE(app, argc, argv);
   axon::log::Level level{};
@@ -472,6 +564,9 @@ int run(int argc, char** argv) {
   }
   if (ch->parsed()) {
     return run_chat(chat);
+  }
+  if (be->parsed()) {
+    return run_bench(bench);
   }
   fmt::print("{}\n", app.help());
   return 0;
