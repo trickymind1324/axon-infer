@@ -27,7 +27,7 @@ VERSION="$("$AXON" --version)"
 COMPILER="$(printf '%s\n' "$VERSION" | sed -n 's/^compiler: //p')"
 CPU="$(printf '%s\n' "$VERSION" | sed -n 's/^cpu: //p')"
 COMMIT="$(git rev-parse --short=12 HEAD)"
-DIRTY="$(git diff --quiet && echo false || echo true)"
+DIRTY="$(git diff --quiet && echo False || echo True)"
 case "$(uname -s)" in
   Darwin) OS="macOS $(sw_vers -productVersion) ($(uname -m))"; RAM_GB=$(( $(sysctl -n hw.memsize) / 1073741824 )); SHA="$(shasum -a 256 "$MODEL" | cut -d' ' -f1)";;
   *) OS="$(uname -sr) ($(uname -m))"; RAM_GB=$(( $(awk '/MemTotal/ {print $2}' /proc/meminfo) / 1048576 )); SHA="$(sha256sum "$MODEL" | cut -d' ' -f1)";;
