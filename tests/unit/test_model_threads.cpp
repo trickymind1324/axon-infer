@@ -80,7 +80,7 @@ TEST_CASE("more threads than heads or rows still works and still matches", "[mod
   auto many = load("synthetic-2l-q8_0.gguf", 13);  // 4 heads, 32 kv columns
   CHECK(forward(*many, tokens) == full);
   CHECK(cached(*many, std::span(tokens).first(3), 1) ==
-        std::vector<float>(full.begin(), full.begin() + 3 * 512));
+        std::vector<float>(full.begin(), full.begin() + std::ptrdiff_t{3} * 512));
 }
 
 TEST_CASE("zero threads means one per physical core", "[model][threads]") {
