@@ -1,0 +1,67 @@
+{
+ "step": "06a-threads",
+ "date": "2026-10-04T05:24:43Z",
+ "host": "m1",
+ "cpu": "Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16",
+ "ram_gb": 8,
+ "os": "macOS 26.6.2 (arm64)",
+ "compiler": "clang 21.0.0",
+ "commit": "7569e589a155",
+ "dirty": false,
+ "peak_gb_s": 68.25,
+ "model": {
+  "file": "SmolLM2-135M-Instruct-f16",
+  "bytes": 270885952,
+  "sha256": "f535f83ec568d040f88ddc04a199fa6da90923bbb41d4dcaed02caa924d6ef57"
+ },
+ "model_file": "models/SmolLM2-135M-Instruct-f16.gguf",
+ "threads": 8,
+ "context": 2048,
+ "prompt_tokens": 512,
+ "generated_tokens": 128,
+ "runs": 5,
+ "prefill_tok_s": {
+  "median": 17.207,
+  "best": 17.308
+ },
+ "decode_tok_s": {
+  "median": 14.802,
+  "best": 14.86
+ },
+ "weight_bytes_per_token": 269101440,
+ "cache_bytes_per_token": 26519040,
+ "weight_gb_s": 3.983,
+ "peak_rss_mb": 334.4,
+ "load_average": {
+  "before": 4.6,
+  "after": 8.34
+ },
+ "measurements": [
+  {
+   "prefill_s": 29.5817,
+   "decode_s": 8.6139,
+   "peak_rss_mb": 334.4
+  },
+  {
+   "prefill_s": 29.6934,
+   "decode_s": 8.6769,
+   "peak_rss_mb": 334.4
+  },
+  {
+   "prefill_s": 29.7943,
+   "decode_s": 8.6408,
+   "peak_rss_mb": 334.4
+  },
+  {
+   "prefill_s": 29.7733,
+   "decode_s": 8.6474,
+   "peak_rss_mb": 334.4
+  },
+  {
+   "prefill_s": 29.7553,
+   "decode_s": 8.6825,
+   "peak_rss_mb": 334.4
+  }
+ ],
+ "description": "llama layers 30 embd 576 heads 9 kv 3 ff 1536 vocab 49152 ctx 8192 rope normal 100000 tied"
+}
