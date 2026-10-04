@@ -24,18 +24,18 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** The kernels are scalar and single-threaded, so throughput is a few tokens per second on a 135M model and about one token per second on a 1B model. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
+**Current limitations.** The kernels are scalar, so a 1B model decodes at about eight tokens per second on eight threads and the F16 path is far slower than the integer path. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
 
 ## Features
 
 - **GGUF loader** over a read-only memory mapping, validating every offset and length before any accessor can be called, fuzzed with a deterministic corruption replay and a libFuzzer target.
 - **Tokenizers** built entirely from GGUF metadata: byte-level BPE with the GPT-2, Llama 3 and Qwen2 pre-tokenizer patterns, and SentencePiece BPE with byte fallback, plus NFC normalization and a streaming decoder that never emits a partial UTF-8 sequence.
-- **Forward pass** on a table of kernels with a scalar reference for each, activations from one arena sized at load, and no heap allocation per token.
+- **Forward pass** on a table of kernels with a scalar reference for each, activations from one arena sized at load, and no heap allocation per token. Threads split matmul columns and attention heads so that logits are bit-identical at any thread count.
 - **Quantized weights** in Q8_0, Q4_0, Q4_1 and Q6_K, dequantized inside the matmul, with activations quantized to Q8_0 blocks for an integer dot product or kept in float for comparison.
 - **KV cache** with prefill, single-token decode and truncation, bit-identical to the cache-free forward.
 - **Sampler** with temperature, top-k, top-p, min-p and a repetition penalty, on a seeded generator that reproduces across platforms.
 - **Chat** through the model's own Jinja template, rendered by a small interpreter with per-family fallbacks, reusing the cached prefix of the conversation across turns.
-- **Tools**: `axon` (chat, generate, tokenize), `axon-dump` for inspecting any GGUF file, `axon-perplexity` for scoring a model over a text, benchmarks for kernels and the forward pass.
+- **Tools**: `axon` (chat, generate, tokenize, bench), `axon-dump` for inspecting any GGUF file, `axon-perplexity` for scoring a model over a text, benchmarks for kernels and the forward pass.
 
 ## Supported models and formats
 
@@ -106,7 +106,7 @@ Germany also has its own capital city, Berlin. However, it's not the same as Par
 [prompt 92 tokens (76 reused), first token in 3.92 s, decode 40 tokens in 9.78 s (4.09 tok/s), cache 131 positions (5.8 MB of 90.0 MB), peak rss 273 MB, seed 15111573243193277517]
 ```
 
-`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt and `--ctx` the cache length.
+`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
 
 ### Generate
 
@@ -197,26 +197,67 @@ Every preset runs the unit tests: debug, release, AddressSanitizer with Undefine
 
 ## Benchmarks
 
-All numbers are single-threaded on an Apple M1 with the scalar kernels, measured by the binaries under `bench/`. Each row is the median of repeated runs after a warm-up.
+Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes a JSON file per run under `bench/results/` with the host, compiler, commit, model SHA256 and load average, and the tables here are the output of `bench/render_tables.py` over those files. The method: a fixed 512-token prompt cut from the committed WikiText-2 text, 128 generated tokens, one warm-up, the median of five runs. All runs are on an Apple M1 (four performance and four efficiency cores, 68.25 GB/s peak memory bandwidth) with the scalar kernels.
 
-End-to-end on SmolLM2-135M with F16 weights:
+```
+$ ./build/release/apps/axon/axon bench -m models/SmolLM2-135M-Instruct-Q8_0.gguf --threads 4
+```
 
-| Configuration | Prefill tok/s | Generate tok/s |
-|---|---|---|
-| Scalar, 1 thread, no cache | 4.1 | 0.28 |
-| Scalar, 1 thread, KV cache | 4.1 | 4.3 |
+The `06a-static` step split work statically across threads and the `06a-threads` step claims it in chunks. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
 
-The first row is the deliberately naive baseline: every generated token recomputes the whole sequence. The KV cache turns generation into one forward pass per token, so decode runs at the same rate as prefill. Every later optimization is measured against these rows.
+| Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |
+|---|---|---|---|---|---|---|
+| 06a-static | Llama-3.2-1B-Instruct-Q4_0 | 1 | 1.9 | 1.90 | 1.45 | 2% |
+| 06a-static | Llama-3.2-1B-Instruct-Q4_0 | 8 | 8.6 | 7.69 | 5.88 | 9% |
+| 06a-static | SmolLM2-135M-Instruct-Q8_0 | 1 | 55.4 | 44.83 | 6.41 | 9% |
+| 06a-static | SmolLM2-135M-Instruct-Q8_0 | 2 | 104.8 | 68.55 | 9.80 | 14% |
+| 06a-static | SmolLM2-135M-Instruct-Q8_0 | 4 | 188.6 | 76.78 | 10.98 | 16% |
+| 06a-static | SmolLM2-135M-Instruct-Q8_0 | 8 | 209.9 | 45.26 | 6.47 | 9% |
+| 06a-static | SmolLM2-135M-Instruct-f16 | 1 | 4.1 | 4.08 | 1.10 | 2% |
+| 06a-static | SmolLM2-135M-Instruct-f16 | 2 | 8.1 | 7.59 | 2.04 | 3% |
+| 06a-static | SmolLM2-135M-Instruct-f16 | 4 | 13.6 | 12.78 | 3.44 | 5% |
+| 06a-static | SmolLM2-135M-Instruct-f16 | 8 | 16.5 | 13.70 | 3.69 | 5% |
+| 06a-threads | Llama-3.2-1B-Instruct-Q4_0 | 1 | 1.9 | 1.89 | 1.45 | 2% |
+| 06a-threads | Llama-3.2-1B-Instruct-Q4_0 | 4 | 6.4 | 6.17 | 4.72 | 7% |
+| 06a-threads | Llama-3.2-1B-Instruct-Q4_0 | 8 | 8.6 | 7.90 | 6.04 | 9% |
+| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 1 | 55.4 | 45.07 | 6.45 | 9% |
+| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 2 | 104.1 | 72.00 | 10.30 | 15% |
+| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 4 | 188.9 | 88.47 | 12.65 | 19% |
+| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 8 | 238.9 | 59.05 | 8.45 | 12% |
+| 06a-threads | SmolLM2-135M-Instruct-f16 | 1 | 4.1 | 4.08 | 1.10 | 2% |
+| 06a-threads | SmolLM2-135M-Instruct-f16 | 2 | 8.1 | 7.64 | 2.06 | 3% |
+| 06a-threads | SmolLM2-135M-Instruct-f16 | 4 | 13.6 | 12.73 | 3.42 | 5% |
+| 06a-threads | SmolLM2-135M-Instruct-f16 | 8 | 17.2 | 14.80 | 3.98 | 6% |
 
-Decode cost per token is nearly flat in context depth on the scalar path, because the attention over cached positions is small next to the weight matmuls:
+Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06a-threads, relative to 1 thread(s):
 
-| Cached positions | ms per decoded token |
-|---|---|
-| 32 | 252 |
-| 512 | 248 |
-| 2048 | 266 |
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 55.4 | 45.07 | 1.00x | 1.00x |
+| 2 | 104.1 | 72.00 | 1.88x | 1.60x |
+| 4 | 188.9 | 88.47 | 3.41x | 1.96x |
+| 8 | 238.9 | 59.05 | 4.31x | 1.31x |
 
-Scalar matmul, the kernel that dominates decode:
+Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06a-threads, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 4.1 | 4.08 | 1.00x | 1.00x |
+| 2 | 8.1 | 7.64 | 1.97x | 1.87x |
+| 4 | 13.6 | 12.73 | 3.28x | 3.12x |
+| 8 | 17.2 | 14.80 | 4.16x | 3.63x |
+
+Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06a-threads, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 1.9 | 1.89 | 1.00x | 1.00x |
+| 4 | 6.4 | 6.17 | 3.38x | 3.26x |
+| 8 | 8.6 | 7.90 | 4.51x | 4.18x |
+
+Two things the tables show. The integer path on Q8_0 decodes ten times faster than the F16 path on one thread, 45 against 4 tokens per second, before any SIMD work. And eight threads only pay off when each matmul is large enough to amortise the launch: on the 1B model eight threads beat four, on the 135M model four threads win decode because its matmuls are microseconds of work and the efficiency cores and the launch cost dominate. Prefill, which runs many rows per launch, scales further than decode everywhere. The gap to peak bandwidth is the headroom the SIMD kernels are for.
+
+Scalar matmul on one thread, the kernel that dominates decode:
 
 | Weights | Shape (out x in) | GFLOP/s | GB/s |
 |---|---|---|---|
@@ -226,8 +267,6 @@ Scalar matmul, the kernel that dominates decode:
 | F16 | 1536 x 576 | 1.1 | 1.1 |
 | F16 | 2048 x 2048 | 1.1 | 1.1 |
 | F16 | 8192 x 2048 | 1.1 | 1.1 |
-
-The F16 path is half the speed of F32 because every element goes through a scalar half-to-float conversion. That is the expected shape of a reference implementation and the first target for SIMD work.
 
 Quantized matmul, 2048 x 2048, dequantizing inside the kernel:
 
@@ -252,6 +291,32 @@ Measured on SmolLM2-135M-Instruct against its F16 file, over the ten prompt fixt
 
 A 135M model loses a lot to Q4_0. That is a property of the model and the format, reproduced by Hugging Face on the same weights, not of the engine. Larger models lose far less, and the perplexity tool makes the trade-off measurable for any file.
 
+### Provenance
+
+| File | Host | CPU | Commit | Date | Model SHA256 |
+|---|---|---|---|---|---|
+| m1-06a-static-Llama-3.2-1B-Instruct-Q4_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | fa0390e7c043 |
+| m1-06a-static-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | fa0390e7c043 |
+| m1-06a-static-SmolLM2-135M-Instruct-Q8_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | 5a1395716f79 |
+| m1-06a-static-SmolLM2-135M-Instruct-Q8_0-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | 5a1395716f79 |
+| m1-06a-static-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | 5a1395716f79 |
+| m1-06a-static-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | 5a1395716f79 |
+| m1-06a-static-SmolLM2-135M-Instruct-f16-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | f535f83ec568 |
+| m1-06a-static-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | f535f83ec568 |
+| m1-06a-static-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | f535f83ec568 |
+| m1-06a-static-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 34af445d52af | 2026-10-03 | f535f83ec568 |
+| m1-06a-threads-Llama-3.2-1B-Instruct-Q4_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | fa0390e7c043 |
+| m1-06a-threads-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | fa0390e7c043 |
+| m1-06a-threads-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | fa0390e7c043 |
+| m1-06a-threads-SmolLM2-135M-Instruct-Q8_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | 5a1395716f79 |
+| m1-06a-threads-SmolLM2-135M-Instruct-Q8_0-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | 5a1395716f79 |
+| m1-06a-threads-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | 5a1395716f79 |
+| m1-06a-threads-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | 5a1395716f79 |
+| m1-06a-threads-SmolLM2-135M-Instruct-f16-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
+| m1-06a-threads-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
+| m1-06a-threads-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
+| m1-06a-threads-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
+
 ## Design notes
 
 ### Kernels
@@ -259,6 +324,8 @@ A 135M model loses a lot to Q4_0. That is a property of the model and the format
 Every operation the forward pass needs lives behind one table of function pointers: matmul for F32, F16 and BF16 weights (single vector and multi-row), RMSNorm, RoPE (adjacent-pair and NeoX layouts, with the Llama 3.x per-dimension frequency factors), softmax, SwiGLU, embedding lookup and causal attention with grouped-query heads, over a whole sequence or over a cache. The scalar implementations under `src/kernels/ref/` are the reference: plain loops, sequential float accumulation, written to be read. Optimized tables slot in without touching any call site and are tested against the scalar one.
 
 ### Forward pass
+
+Threads split the output columns of every matmul, the heads of the attention and the rows of activation quantization, claiming chunks dynamically so the M1's slower efficiency cores do not pace each launch. No partial sum ever crosses a thread, so the logits are bit-identical at any thread count, and that equality is a test on every weight format rather than a tolerance. There is no deterministic mode because nothing needs one yet.
 
 `LlamaModel` reads its configuration from the GGUF metadata, binds every weight with an exact shape and dtype check, and runs the block in the order the paper gives it: RMSNorm, Q/K/V projections, RoPE, causal grouped-query attention, output projection, RMSNorm, SwiGLU feed-forward, each with a residual add. Weights stay memory-mapped. Activations come from one arena sized at load, and a test asserts that the computed size equals the measured high-water mark and that a forward pass performs no heap allocation.
 
@@ -305,6 +372,7 @@ Fixtures under `tests/reference/fixtures/` are generated by the Python scripts n
 - Kernel fixtures are `.axt` tensors (a 4-byte magic, dims, dtype, raw data) written by NumPy in float64.
 - Model fixtures are a NumPy forward over the synthetic model, and for SmolLM2 the Hugging Face argmax per position, last-position logits and greedy continuations. The full per-position logits stay in the gitignored `tests/reference/local/` and are checked when `AXON_LOCAL_FIXTURES` points there.
 - Chat template fixtures are the Hugging Face `apply_chat_template` output for three conversations per family, produced from the tokenizers alone.
+- Benchmark results under `bench/results/` are written by `bench/bench_e2e.sh` and never edited. `bench/render_tables.py` renders them, and `--self-test` checks the renderer in the check script.
 - Quantization fixtures are rows and small matrices quantized by the `gguf` package, with its dequantized values alongside.
 - The perplexity text is the head of the WikiText-2 raw test split (Merity et al., "Pointer Sentinel Mixture Models", 2016, CC BY-SA 3.0), written by `scripts/make_perplexity_fixture.py`, with Hugging Face reference numbers for the SmolLM2 files from `tests/reference/gen_perplexity_reference.py`.
 
