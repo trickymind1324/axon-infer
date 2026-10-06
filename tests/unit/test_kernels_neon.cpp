@@ -177,4 +177,57 @@ TEST_CASE("NEON activation quantization and integer matmuls are bit-identical to
   }
 }
 
+TEST_CASE("NEON Q6_K matmul stays within the locked tolerance of scalar", "[kernels][neon]") {
+  const auto& neon = neon_table();
+  float worst = 0.0F;
+  for (const std::size_t n_in : {std::size_t{256}, std::size_t{512}, std::size_t{2048}}) {
+    for (const std::size_t n_out :
+         {std::size_t{1}, std::size_t{3}, std::size_t{7}, std::size_t{48}}) {
+      // Random quants, high bits and scales with a small super-block scale, like the fixtures.
+      std::vector<axon::BlockQ6_K> w(n_out * n_in / 256);
+      std::mt19937 rng(static_cast<std::uint32_t>(n_in * 3 + n_out));
+      for (auto& block : w) {
+        for (auto& q : block.ql) {
+          q = static_cast<std::uint8_t>(rng() & 0xFF);
+        }
+        for (auto& q : block.qh) {
+          q = static_cast<std::uint8_t>(rng() & 0xFF);
+        }
+        for (auto& sc : block.scales) {
+          sc = static_cast<std::int8_t>(rng() & 0xFF);
+        }
+        block.d = axon::fp32_to_fp16(1e-3F);
+      }
+      const auto x = random_floats(n_in, static_cast<std::uint32_t>(n_in + 5));
+      std::vector<float> a(n_out);
+      std::vector<float> b(n_out);
+      scalar().matmul_q6_k(w.data(), x.data(), a.data(), n_out, n_in);
+      neon.matmul_q6_k(w.data(), x.data(), b.data(), n_out, n_in);
+      // Dequantized weights for the error scale.
+      std::vector<float> deq(n_out * n_in);
+      for (std::size_t i = 0; i < w.size(); ++i) {
+        axon::dequantize_block_q6_k(w[i], deq.data() + i * 256);
+      }
+      worst = std::max(worst, relative_error(a, b, deq, x, n_out, n_in));
+      const auto xs = random_floats(3 * n_in, static_cast<std::uint32_t>(n_in + 6));
+      std::vector<float> ra(3 * n_out);
+      std::vector<float> rb(3 * n_out);
+      scalar().matmul_q6_k_rows(w.data(), xs.data(), ra.data(), 3, n_out, n_in);
+      neon.matmul_q6_k_rows(w.data(), xs.data(), rb.data(), 3, n_out, n_in);
+      for (std::size_t r = 0; r < 3; ++r) {
+        const std::vector<float> pa(ra.begin() + static_cast<std::ptrdiff_t>(r * n_out),
+                                    ra.begin() + static_cast<std::ptrdiff_t>((r + 1) * n_out));
+        const std::vector<float> pb(rb.begin() + static_cast<std::ptrdiff_t>(r * n_out),
+                                    rb.begin() + static_cast<std::ptrdiff_t>((r + 1) * n_out));
+        const std::vector<float> xr(xs.begin() + static_cast<std::ptrdiff_t>(r * n_in),
+                                    xs.begin() + static_cast<std::ptrdiff_t>((r + 1) * n_in));
+        worst = std::max(worst, relative_error(pa, pb, deq, xr, n_out, n_in));
+      }
+    }
+  }
+  // Measured 2026-10-06: 1.54e-7. Locked at four times that, rounded up to match the float gates.
+  WARN("NEON Q6_K matmul relative error against scalar: " << worst);
+  CHECK(worst < 8e-7F);
+}
+
 #endif

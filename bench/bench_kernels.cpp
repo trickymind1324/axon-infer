@@ -157,6 +157,38 @@ void bm_matmul_q4_0(benchmark::State& state) {
   report_matmul(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ4_0));
 }
 
+// Q6_K weights against float activations. Args are {n_out, n_in, table}.
+void bm_matmul_q6_k(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  std::vector<axon::BlockQ6_K> wq(n_out * n_in / 256);
+  std::uint32_t pattern = 0x2545F491U;
+  for (auto& block : wq) {
+    for (auto& q : block.ql) {
+      pattern = pattern * 1664525U + 1013904223U;
+      q = static_cast<std::uint8_t>(pattern >> 24);
+    }
+    for (auto& q : block.qh) {
+      pattern = pattern * 1664525U + 1013904223U;
+      q = static_cast<std::uint8_t>(pattern >> 24);
+    }
+    for (auto& sc : block.scales) {
+      pattern = pattern * 1664525U + 1013904223U;
+      sc = static_cast<std::int8_t>(pattern >> 25);
+    }
+    block.d = axon::fp32_to_fp16(0.001F);
+  }
+  const auto x = random_floats(n_in, 2);
+  std::vector<float> y(n_out);
+  const auto& k = table_for(state);
+  for (auto _ : state) {
+    k.matmul_q6_k(wq.data(), x.data(), y.data(), n_out, n_in);
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ6_K));
+}
+
 }  // namespace
 
 BENCHMARK(bm_parallel_for_overhead)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->UseRealTime();
@@ -186,3 +218,8 @@ BENCHMARK(bm_matmul_q4_0)
     ->Args({8192, 2048, 1, 0})
     ->Args({2048, 2048, 1, 1})
     ->Args({8192, 2048, 1, 1});
+BENCHMARK(bm_matmul_q6_k)
+    ->Args({2048, 2048, 0})
+    ->Args({8192, 2048, 0})
+    ->Args({2048, 2048, 1})
+    ->Args({8192, 2048, 1});

@@ -15,5 +15,6 @@ void install(KernelTable& table);
 // One per file.
 void install_float(KernelTable& table);
 void install_quant(KernelTable& table);
+void install_q6k(KernelTable& table);
 
 }  // namespace axon::kernels::neon
