@@ -12,4 +12,7 @@ namespace axon::kernels::neon {
 // Fills `table`, which starts as a copy of the scalar table, with the NEON overrides.
 void install(KernelTable& table);
 
+// One per file.
+void install_float(KernelTable& table);
+
 }  // namespace axon::kernels::neon

@@ -3,7 +3,7 @@
 namespace axon::kernels::neon {
 
 void install(KernelTable& table) {
-  static_cast<void>(table);  // overrides arrive one file at a time
+  install_float(table);
 }
 
 }  // namespace axon::kernels::neon

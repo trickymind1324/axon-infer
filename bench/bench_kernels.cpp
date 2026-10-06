@@ -54,13 +54,21 @@ void report_matmul(benchmark::State& state, std::size_t n_out, std::size_t n_in,
 
 // Single-vector matmul at the shapes of the SmolLM2-135M (576 x 1536) and 2B-class
 // (2048 x 2048, 2048 x 8192) projections. Args are {n_out, n_in}.
+// Args are {n_out, n_in, table}: table 0 is scalar and 1 the best the host supports.
+const axon::kernels::KernelTable& table_for(benchmark::State& state) {
+  if (state.range(2) == 0) {
+    return axon::kernels::scalar_kernels();
+  }
+  return **axon::kernels::select(axon::kernels::KernelSet::Auto);
+}
+
 void bm_matmul_f32(benchmark::State& state) {
   const auto n_out = static_cast<std::size_t>(state.range(0));
   const auto n_in = static_cast<std::size_t>(state.range(1));
   const auto w = random_floats(n_out * n_in, 1);
   const auto x = random_floats(n_in, 2);
   std::vector<float> y(n_out);
-  const auto& k = axon::kernels::kernels();
+  const auto& k = table_for(state);
   for (auto _ : state) {
     k.matmul_f32(w.data(), x.data(), y.data(), n_out, n_in);
     benchmark::DoNotOptimize(y.data());
@@ -79,7 +87,7 @@ void bm_matmul_f16(benchmark::State& state) {
   }
   const auto x = random_floats(n_in, 2);
   std::vector<float> y(n_out);
-  const auto& k = axon::kernels::kernels();
+  const auto& k = table_for(state);
   for (auto _ : state) {
     k.matmul_f16(w.data(), x.data(), y.data(), n_out, n_in);
     benchmark::DoNotOptimize(y.data());
@@ -149,7 +157,19 @@ void bm_matmul_q4_0(benchmark::State& state) {
 }  // namespace
 
 BENCHMARK(bm_parallel_for_overhead)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->UseRealTime();
-BENCHMARK(bm_matmul_f32)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
-BENCHMARK(bm_matmul_f16)->Args({1536, 576})->Args({2048, 2048})->Args({8192, 2048});
+BENCHMARK(bm_matmul_f32)
+    ->Args({1536, 576, 0})
+    ->Args({2048, 2048, 0})
+    ->Args({8192, 2048, 0})
+    ->Args({1536, 576, 1})
+    ->Args({2048, 2048, 1})
+    ->Args({8192, 2048, 1});
+BENCHMARK(bm_matmul_f16)
+    ->Args({1536, 576, 0})
+    ->Args({2048, 2048, 0})
+    ->Args({8192, 2048, 0})
+    ->Args({1536, 576, 1})
+    ->Args({2048, 2048, 1})
+    ->Args({8192, 2048, 1});
 BENCHMARK(bm_matmul_q8_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
 BENCHMARK(bm_matmul_q4_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
