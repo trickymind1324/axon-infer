@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <random>
 #include <vector>
 
@@ -109,6 +110,71 @@ TEST_CASE("NEON float matmuls stay within the locked tolerance of scalar", "[ker
                                                                << worst_f16);
   CHECK(worst_f32 < 8e-7F);
   CHECK(worst_f16 < 8e-7F);
+}
+
+TEST_CASE("NEON activation quantization and integer matmuls are bit-identical to scalar",
+          "[kernels][neon]") {
+  const auto& neon = neon_table();
+  for (const std::size_t n_in : {std::size_t{32}, std::size_t{64}, std::size_t{96},
+                                 std::size_t{576}, std::size_t{1536}, std::size_t{2048}}) {
+    for (const std::size_t n_out : kOutSizes) {
+      // Activations quantized through both tables, byte for byte.
+      const auto x = random_floats(n_in, static_cast<std::uint32_t>(n_in + 3), 4.0F);
+      std::vector<axon::BlockQ8_0> xs(n_in / 32);
+      std::vector<axon::BlockQ8_0> xn(n_in / 32);
+      scalar().quantize_row_q8_0(x.data(), xs.data(), n_in);
+      neon.quantize_row_q8_0(x.data(), xn.data(), n_in);
+      INFO("n_in " << n_in << " n_out " << n_out);
+      CHECK(std::memcmp(xs.data(), xn.data(), xs.size() * sizeof(axon::BlockQ8_0)) == 0);
+
+      // Weights quantized by the scalar quantizer for Q8_0, built by hand for the nibble formats.
+      const auto w =
+          random_floats(n_out * n_in, static_cast<std::uint32_t>(n_in * 11 + n_out), 0.5F);
+      std::vector<axon::BlockQ8_0> w8(n_out * n_in / 32);
+      scalar().quantize_row_q8_0(w.data(), w8.data(), w.size());
+      std::vector<axon::BlockQ4_0> w4(w8.size());
+      std::vector<axon::BlockQ4_1> w41(w8.size());
+      std::mt19937 rng(static_cast<std::uint32_t>(n_in + n_out));
+      for (std::size_t b = 0; b < w8.size(); ++b) {
+        w4[b].d = axon::fp32_to_fp16(0.02F);
+        w41[b].d = axon::fp32_to_fp16(0.02F);
+        w41[b].m = axon::fp32_to_fp16(-0.17F);
+        for (std::size_t i = 0; i < 16; ++i) {
+          w4[b].qs[i] = static_cast<std::uint8_t>(rng() & 0xFF);
+          w41[b].qs[i] = static_cast<std::uint8_t>(rng() & 0xFF);
+        }
+      }
+      std::vector<float> a(n_out);
+      std::vector<float> b(n_out);
+      scalar().matmul_q8_0_q8(w8.data(), xs.data(), a.data(), n_out, n_in);
+      neon.matmul_q8_0_q8(w8.data(), xs.data(), b.data(), n_out, n_in);
+      CHECK(a == b);
+      scalar().matmul_q4_0_q8(w4.data(), xs.data(), a.data(), n_out, n_in);
+      neon.matmul_q4_0_q8(w4.data(), xs.data(), b.data(), n_out, n_in);
+      CHECK(a == b);
+      scalar().matmul_q4_1_q8(w41.data(), xs.data(), a.data(), n_out, n_in);
+      neon.matmul_q4_1_q8(w41.data(), xs.data(), b.data(), n_out, n_in);
+      CHECK(a == b);
+
+      // Rows variants over three activation rows.
+      std::vector<axon::BlockQ8_0> xrows(3 * n_in / 32);
+      for (std::size_t r = 0; r < 3; ++r) {
+        const auto xr = random_floats(n_in, static_cast<std::uint32_t>(n_in + 10 + r), 4.0F);
+        scalar().quantize_row_q8_0(xr.data(), xrows.data() + r * (n_in / 32), n_in);
+      }
+      std::vector<float> ra(3 * n_out);
+      std::vector<float> rb(3 * n_out);
+      scalar().matmul_q8_0_q8_rows(w8.data(), xrows.data(), ra.data(), 3, n_out, n_in);
+      neon.matmul_q8_0_q8_rows(w8.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      CHECK(ra == rb);
+      scalar().matmul_q4_0_q8_rows(w4.data(), xrows.data(), ra.data(), 3, n_out, n_in);
+      neon.matmul_q4_0_q8_rows(w4.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      CHECK(ra == rb);
+      scalar().matmul_q4_1_q8_rows(w41.data(), xrows.data(), ra.data(), 3, n_out, n_in);
+      neon.matmul_q4_1_q8_rows(w41.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      CHECK(ra == rb);
+    }
+  }
 }
 
 #endif

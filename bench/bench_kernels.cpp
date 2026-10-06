@@ -97,11 +97,14 @@ void bm_matmul_f16(benchmark::State& state) {
 }
 
 // Q8_0 weights against float activations (dequantize on the fly) and against Q8_0
-// activations (integer dot). The second is the path the model uses by default.
+// activations (integer dot). The second is the path the model uses by default. Args are
+// {n_out, n_in, int_dot, table}, table 0 scalar and 1 the best the host supports.
 void bm_matmul_q8_0(benchmark::State& state) {
   const auto n_out = static_cast<std::size_t>(state.range(0));
   const auto n_in = static_cast<std::size_t>(state.range(1));
   const bool int_dot = state.range(2) != 0;
+  const auto& k = state.range(3) == 0 ? axon::kernels::scalar_kernels()
+                                      : **axon::kernels::select(axon::kernels::KernelSet::Auto);
   const auto w = random_floats(n_out * n_in, 1);
   std::vector<axon::BlockQ8_0> wq(n_out * n_in / 32);
   axon::quantize_row_q8_0(w.data(), wq.data(), w.size());
@@ -109,7 +112,6 @@ void bm_matmul_q8_0(benchmark::State& state) {
   std::vector<axon::BlockQ8_0> xq(n_in / 32);
   axon::quantize_row_q8_0(x.data(), xq.data(), n_in);
   std::vector<float> y(n_out);
-  const auto& k = axon::kernels::kernels();
   for (auto _ : state) {
     if (int_dot) {
       k.matmul_q8_0_q8(wq.data(), xq.data(), y.data(), n_out, n_in);
@@ -128,6 +130,8 @@ void bm_matmul_q4_0(benchmark::State& state) {
   const auto n_out = static_cast<std::size_t>(state.range(0));
   const auto n_in = static_cast<std::size_t>(state.range(1));
   const bool int_dot = state.range(2) != 0;
+  const auto& k = state.range(3) == 0 ? axon::kernels::scalar_kernels()
+                                      : **axon::kernels::select(axon::kernels::KernelSet::Auto);
   std::vector<axon::BlockQ4_0> wq(n_out * n_in / 32);
   std::uint32_t pattern = 0x9E3779B9U;
   for (auto& block : wq) {
@@ -141,7 +145,6 @@ void bm_matmul_q4_0(benchmark::State& state) {
   std::vector<axon::BlockQ8_0> xq(n_in / 32);
   axon::quantize_row_q8_0(x.data(), xq.data(), n_in);
   std::vector<float> y(n_out);
-  const auto& k = axon::kernels::kernels();
   for (auto _ : state) {
     if (int_dot) {
       k.matmul_q4_0_q8(wq.data(), xq.data(), y.data(), n_out, n_in);
@@ -171,5 +174,15 @@ BENCHMARK(bm_matmul_f16)
     ->Args({1536, 576, 1})
     ->Args({2048, 2048, 1})
     ->Args({8192, 2048, 1});
-BENCHMARK(bm_matmul_q8_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
-BENCHMARK(bm_matmul_q4_0)->Args({2048, 2048, 0})->Args({2048, 2048, 1})->Args({8192, 2048, 1});
+BENCHMARK(bm_matmul_q8_0)
+    ->Args({2048, 2048, 0, 0})
+    ->Args({2048, 2048, 1, 0})
+    ->Args({8192, 2048, 1, 0})
+    ->Args({2048, 2048, 1, 1})
+    ->Args({8192, 2048, 1, 1});
+BENCHMARK(bm_matmul_q4_0)
+    ->Args({2048, 2048, 0, 0})
+    ->Args({2048, 2048, 1, 0})
+    ->Args({8192, 2048, 1, 0})
+    ->Args({2048, 2048, 1, 1})
+    ->Args({8192, 2048, 1, 1});
