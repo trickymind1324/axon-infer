@@ -47,12 +47,12 @@ constexpr KernelTable kScalarTable{
 
 #if defined(AXON_HAVE_NEON)
 const KernelTable& neon_table() {
-  static const KernelTable table = [] {
+  static const KernelTable kTable = [] {
     KernelTable t = kScalarTable;
     neon::install(t);
     return t;
   }();
-  return table;
+  return kTable;
 }
 #endif
 
