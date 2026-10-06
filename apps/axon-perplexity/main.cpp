@@ -1,6 +1,7 @@
 #include "axon/tokenizer.h"
 
 #include "engine/perplexity.h"
+#include "kernels/kernels.h"
 #include "model/llama.h"
 
 #include <CLI/CLI.hpp>
@@ -24,6 +25,7 @@ struct Options {
   std::size_t max_seq = 128;
   bool exact_activations = false;
   int threads = 0;
+  bool force_scalar = false;
   bool json = false;
 };
 
@@ -41,6 +43,7 @@ int run(int argc, char** argv) {
                "keep activations in float for quantized weights instead of Q8_0 blocks");
   app.add_option("--threads,-t", opt.threads, "threads for the forward pass, 0 for one per core")
       ->default_val(0);
+  app.add_flag("--force-scalar", opt.force_scalar, "use the scalar reference kernels");
   app.add_flag("--json", opt.json, "print one JSON object instead of text");
   CLI11_PARSE(app, argc, argv);
 
@@ -52,11 +55,13 @@ int run(int argc, char** argv) {
   const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
   const auto t0 = std::chrono::steady_clock::now();
-  auto loaded =
-      axon::model::LlamaModel::load(opt.model, {.max_seq = std::min(opt.max_seq, opt.chunk_size),
-                                                .max_ctx = opt.chunk_size,
-                                                .exact_activations = opt.exact_activations,
-                                                .n_threads = opt.threads});
+  auto loaded = axon::model::LlamaModel::load(
+      opt.model, {.max_seq = std::min(opt.max_seq, opt.chunk_size),
+                  .max_ctx = opt.chunk_size,
+                  .exact_activations = opt.exact_activations,
+                  .n_threads = opt.threads,
+                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                              : axon::kernels::KernelSet::Auto});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;

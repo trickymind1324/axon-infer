@@ -33,6 +33,7 @@ struct BenchResult {
   std::size_t prompt_tokens = 0;
   std::size_t generated_tokens = 0;
   int threads = 0;
+  std::string kernels;  // table name, "scalar" or "neon"
   std::size_t context = 0;
   std::vector<BenchRun> runs;  // the measured runs, warm-up excluded
   double prefill_tok_s_median = 0.0;

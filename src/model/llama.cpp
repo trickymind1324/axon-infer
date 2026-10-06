@@ -23,9 +23,8 @@ namespace {
 // the weight. Quantized weights take the row's Q8_0 blocks in `xq` unless `exact` asks for the
 // float path. Each output element is computed by exactly one call with the same instruction
 // sequence whatever the split, which is what keeps threaded results bit-identical.
-void matmul_columns(const Tensor& w, const float* x, const BlockQ8_0* xq, float* y,
-                    std::size_t begin, std::size_t end, bool exact) {
-  const auto& k = kernels::kernels();
+void matmul_columns(const kernels::KernelTable& k, const Tensor& w, const float* x,
+                    const BlockQ8_0* xq, float* y, std::size_t begin, std::size_t end, bool exact) {
   const auto n_in = static_cast<std::size_t>(w.ne0);
   const std::size_t n_out = end - begin;
   const auto* base = static_cast<const std::byte*>(w.data) + begin * w.row_bytes;
@@ -91,9 +90,8 @@ void add_rows(std::span<float> x, std::span<const float> y) {
   }
 }
 
-void rmsnorm_rows(std::span<const float> x, const Tensor& weight, std::span<float> out,
-                  std::size_t n_rows, float eps) {
-  const auto& k = kernels::kernels();
+void rmsnorm_rows(const kernels::KernelTable& k, std::span<const float> x, const Tensor& weight,
+                  std::span<float> out, std::size_t n_rows, float eps) {
   const auto n = static_cast<std::size_t>(weight.ne0);
   for (std::size_t r = 0; r < n_rows; ++r) {
     k.rmsnorm(x.data() + r * n, static_cast<const float*>(weight.data), out.data() + r * n, n, eps);
@@ -136,10 +134,10 @@ std::size_t sum_weight_bytes(const LlamaWeights& w, const LlamaConfig& cfg) {
 }  // namespace
 
 LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer> tokenizer,
-                       LlamaWeights weights, LoadOptions options)
+                       LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
-      exact_activations_(options.exact_activations), pool_(options.n_threads),
+      exact_activations_(options.exact_activations), kernels_(table), pool_(options.n_threads),
       weight_bytes_(sum_weight_bytes(weights_, cfg_)),
       arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()))) {}
 
@@ -179,8 +177,13 @@ Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::pa
     return make_error(weights.error().code,
                       fmt::format("{}: {}", path.string(), weights.error().message));
   }
-  return std::unique_ptr<LlamaModel>(new LlamaModel(
-      std::move(*file), std::move(*cfg), std::move(*tokenizer), std::move(*weights), options));
+  auto table = kernels::select(options.kernels);
+  if (!table) {
+    return table.error();
+  }
+  return std::unique_ptr<LlamaModel>(new LlamaModel(std::move(*file), std::move(*cfg),
+                                                    std::move(*tokenizer), std::move(*weights),
+                                                    options, *table));
 }
 
 Expected<std::span<const float>> LlamaModel::forward(std::span<const std::int32_t> tokens,
@@ -235,7 +238,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     }
   }
 
-  const auto& k = kernels::kernels();
+  const kernels::KernelTable& k = *kernels_;
   const std::size_t n_embd = cfg_.n_embd;
   const std::size_t n_ff = cfg_.n_ff;
   const std::size_t head_dim = cfg_.head_dim;
@@ -275,7 +278,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     const std::size_t chunk = std::max<std::size_t>(16, n_out / (n_threads * 8));
     pool_.parallel_for(0, n_out, chunk, [&](std::size_t begin, std::size_t end, int) {
       for (std::size_t r = 0; r < seq; ++r) {
-        matmul_columns(w, x + r * n_in, quantize ? a.xq.data() + r * nb : nullptr, y + r * n_out,
+        matmul_columns(k, w, x + r * n_in, quantize ? a.xq.data() + r * nb : nullptr, y + r * n_out,
                        begin, end, exact_activations_);
       }
     });
@@ -305,7 +308,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     float* v_new = v_base + n_past * kv_row;
     AXON_DUMP(dump_this, "x_in", a.x);
 
-    rmsnorm_rows(a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
+    rmsnorm_rows(k, a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "attn_norm_out", a.h);
     mm(w.wq, a.h.data(), a.q.data());
     mm(w.wk, a.h.data(), k_new);
@@ -332,7 +335,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_mid", a.x);
 
-    rmsnorm_rows(a.x, w.ffn_norm, a.h, seq, cfg_.rms_eps);
+    rmsnorm_rows(k, a.x, w.ffn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "ffn_norm_out", a.h);
     mm(w.w_gate, a.h.data(), a.gate.data());
     mm(w.w_up, a.h.data(), a.up.data());
@@ -343,7 +346,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     AXON_DUMP(dump_this, "x_out", a.x);
   }
 
-  rmsnorm_rows(a.x, weights_.output_norm, a.h, seq, cfg_.rms_eps);
+  rmsnorm_rows(k, a.x, weights_.output_norm, a.h, seq, cfg_.rms_eps);
   mm(weights_.output, a.h.data(), a.logits.data());
   AXON_DUMP(dumping, "logits", a.logits);
 #undef AXON_DUMP

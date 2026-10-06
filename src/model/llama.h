@@ -6,6 +6,7 @@
 #include "core/gguf.h"
 #include "core/threadpool.h"
 
+#include "kernels/kernels.h"
 #include "model/config.h"
 #include "model/kv_cache.h"
 #include "model/weights.h"
@@ -29,6 +30,8 @@ struct LoadOptions {
   // Threads for the forward pass. 0 means one per physical core. Any count gives logits
   // bit-identical to one thread, because work is split so no reduction crosses threads.
   int n_threads = 0;
+  // Which kernel table runs the forward pass. Auto picks the best the host supports.
+  kernels::KernelSet kernels = kernels::KernelSet::Auto;
 };
 
 struct ForwardOptions {
@@ -73,6 +76,7 @@ public:
   [[nodiscard]] std::size_t max_ctx() const noexcept { return max_ctx_; }
   [[nodiscard]] bool exact_activations() const noexcept { return exact_activations_; }
   [[nodiscard]] int n_threads() const noexcept { return pool_.size(); }
+  [[nodiscard]] const kernels::KernelTable& table() const noexcept { return *kernels_; }
   // Bytes of weights one forward pass reads per position, the number to hold against memory
   // bandwidth.
   [[nodiscard]] std::size_t weight_bytes_per_token() const noexcept { return weight_bytes_; }
@@ -81,7 +85,7 @@ public:
 
 private:
   LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer> tokenizer,
-             LlamaWeights weights, LoadOptions options);
+             LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table);
   Expected<std::span<const float>> run(std::span<const std::int32_t> tokens, KVCache* cache,
                                        const ForwardOptions& opts);
 
@@ -92,6 +96,7 @@ private:
   std::size_t max_seq_;
   std::size_t max_ctx_;
   bool exact_activations_;
+  const kernels::KernelTable* kernels_;
   ThreadPool pool_;
   std::size_t weight_bytes_ = 0;
   Arena arena_;

@@ -8,6 +8,7 @@
 #include "chat/template.h"
 #include "engine/bench.h"
 #include "engine/engine.h"
+#include "kernels/kernels.h"
 #include "model/llama.h"
 
 #include <CLI/CLI.hpp>
@@ -192,6 +193,7 @@ struct GenerateCli {
   std::size_t max_seq = 256;
   std::size_t ctx = 2048;
   int threads = 0;
+  bool force_scalar = false;
   bool no_cache = false;
   bool no_bos = false;
   bool stats = false;
@@ -252,7 +254,11 @@ int run_generate(const GenerateCli& opt) {
   const std::size_t ctx = use_cache ? opt.ctx : opt.max_seq;
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, ctx), .max_ctx = ctx, .n_threads = opt.threads});
+      opt.model, {.max_seq = std::min(opt.max_seq, ctx),
+                  .max_ctx = ctx,
+                  .n_threads = opt.threads,
+                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                              : axon::kernels::KernelSet::Auto});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -306,6 +312,7 @@ struct ChatCli {
   std::size_t max_seq = 256;
   int max_tokens = 256;
   int threads = 0;
+  bool force_scalar = false;
   bool stats = false;
   SamplingCli sampling;
 };
@@ -313,8 +320,11 @@ struct ChatCli {
 int run_chat(const ChatCli& opt) {
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model,
-      {.max_seq = std::min(opt.max_seq, opt.ctx), .max_ctx = opt.ctx, .n_threads = opt.threads});
+      opt.model, {.max_seq = std::min(opt.max_seq, opt.ctx),
+                  .max_ctx = opt.ctx,
+                  .n_threads = opt.threads,
+                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                              : axon::kernels::KernelSet::Auto});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -329,8 +339,9 @@ int run_chat(const ChatCli& opt) {
   const auto load_s =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_load).count();
 
-  fmt::print("model: {} ({}), loaded in {:.2f} s, {} threads\n", model.file().model_name(),
-             model.config().describe(), load_s, model.n_threads());
+  fmt::print("model: {} ({}), loaded in {:.2f} s, {} threads, {} kernels\n",
+             model.file().model_name(), model.config().describe(), load_s, model.n_threads(),
+             axon::kernels::name(model.table()));
   fmt::print("chat template: {}, context {} tokens, temperature {}\n", tmpl.source(),
              model.max_ctx(), opt.sampling.temperature);
   fmt::print("type a message and press enter. /clear starts over, /stats shows the last turn, "
@@ -412,6 +423,7 @@ struct BenchCli {
   std::size_t ctx = 2048;
   std::size_t max_seq = 128;
   int threads = 0;
+  bool force_scalar = false;
   bool json = false;
 };
 
@@ -425,8 +437,11 @@ int run_bench(const BenchCli& opt) {
   }
   const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   auto loaded = axon::model::LlamaModel::load(
-      opt.model,
-      {.max_seq = std::min(opt.max_seq, opt.ctx), .max_ctx = opt.ctx, .n_threads = opt.threads});
+      opt.model, {.max_seq = std::min(opt.max_seq, opt.ctx),
+                  .max_ctx = opt.ctx,
+                  .n_threads = opt.threads,
+                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                              : axon::kernels::KernelSet::Auto});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -440,8 +455,9 @@ int run_bench(const BenchCli& opt) {
   }
   ids.resize(opt.prompt_tokens);
   if (!opt.json) {
-    fmt::print("model: {} ({}), {} threads, context {}\n", model.file().model_name(),
-               model.config().describe(), model.n_threads(), model.max_ctx());
+    fmt::print("model: {} ({}), {} threads, {} kernels, context {}\n", model.file().model_name(),
+               model.config().describe(), model.n_threads(), axon::kernels::name(model.table()),
+               model.max_ctx());
     fmt::print("prompt {} tokens, generate {}, {} runs after one warm-up\n", ids.size(),
                opt.generate, opt.runs);
   }
@@ -509,6 +525,8 @@ int run(int argc, char** argv) {
   gen->add_option("--threads,-t", generate.threads,
                   "threads for the forward pass, 0 for one per core")
       ->default_val(0);
+  gen->add_flag("--force-scalar", generate.force_scalar,
+                "use the scalar reference kernels instead of the best the CPU supports");
   gen->add_flag("--no-cache", generate.no_cache,
                 "recompute the whole sequence every step instead of using the cache (greedy)");
   gen->add_flag("--no-bos", generate.no_bos, "do not prepend the BOS token");
@@ -528,6 +546,8 @@ int run(int argc, char** argv) {
   ch->add_option("--max-tokens", chat.max_tokens, "longest reply in tokens")->default_val(256);
   ch->add_option("--threads,-t", chat.threads, "threads for the forward pass, 0 for one per core")
       ->default_val(0);
+  ch->add_flag("--force-scalar", chat.force_scalar,
+               "use the scalar reference kernels instead of the best the CPU supports");
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
   add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 
@@ -545,6 +565,8 @@ int run(int argc, char** argv) {
   be->add_option("--max-seq", bench.max_seq, "tokens per forward call")->default_val(128);
   be->add_option("--threads,-t", bench.threads, "threads for the forward pass, 0 for one per core")
       ->default_val(0);
+  be->add_flag("--force-scalar", bench.force_scalar,
+               "use the scalar reference kernels instead of the best the CPU supports");
   be->add_flag("--json", bench.json, "print one JSON object");
   app.require_subcommand(0, 1);
   CLI11_PARSE(app, argc, argv);

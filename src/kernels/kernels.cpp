@@ -1,6 +1,13 @@
 #include "kernels/kernels.h"
 
+#include "core/cpu_info.h"
+
 #include "kernels/ref/ref.h"
+#if defined(AXON_HAVE_NEON)
+#include "kernels/neon/neon.h"
+#endif
+
+#include <fmt/format.h>
 
 namespace axon::kernels {
 
@@ -38,6 +45,26 @@ constexpr KernelTable kScalarTable{
     .matmul_q6_k_rows = ref::matmul_q6_k_rows,
 };
 
+#if defined(AXON_HAVE_NEON)
+const KernelTable& neon_table() {
+  static const KernelTable table = [] {
+    KernelTable t = kScalarTable;
+    neon::install(t);
+    return t;
+  }();
+  return table;
+}
+#endif
+
+bool neon_usable() {
+#if defined(AXON_HAVE_NEON)
+  const CpuInfo& cpu = cpu_info();
+  return cpu.neon && cpu.neon_dotprod;
+#else
+  return false;
+#endif
+}
+
 }  // namespace
 
 const KernelTable& scalar_kernels() {
@@ -46,6 +73,54 @@ const KernelTable& scalar_kernels() {
 
 const KernelTable& kernels() {
   return kScalarTable;
+}
+
+Expected<const KernelTable*> select(KernelSet set) {
+  switch (set) {
+  case KernelSet::Scalar:
+    return &kScalarTable;
+  case KernelSet::Neon:
+#if defined(AXON_HAVE_NEON)
+    if (!neon_usable()) {
+      return make_error(ErrorCode::Unsupported,
+                        "kernels: this CPU lacks the NEON dot product extension (FEAT_DotProd)");
+    }
+    return &neon_table();
+#else
+    return make_error(ErrorCode::Unsupported,
+                      "kernels: NEON kernels are not built on this platform");
+#endif
+  case KernelSet::Auto:
+#if defined(AXON_HAVE_NEON)
+    if (neon_usable()) {
+      return &neon_table();
+    }
+#endif
+    return &kScalarTable;
+  }
+  return &kScalarTable;
+}
+
+std::string_view name(const KernelTable& table) {
+#if defined(AXON_HAVE_NEON)
+  if (&table == &neon_table()) {
+    return "neon";
+  }
+#endif
+  return &table == &kScalarTable ? "scalar" : "custom";
+}
+
+bool parse_kernel_set(std::string_view text, KernelSet& out) {
+  if (text == "auto") {
+    out = KernelSet::Auto;
+  } else if (text == "scalar") {
+    out = KernelSet::Scalar;
+  } else if (text == "neon") {
+    out = KernelSet::Neon;
+  } else {
+    return false;
+  }
+  return true;
 }
 
 }  // namespace axon::kernels

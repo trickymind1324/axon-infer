@@ -9,9 +9,11 @@
 // reduction order that deterministic mode will pin.
 
 #include "core/dtype.h"
+#include "core/expected.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace axon::kernels {
 
@@ -119,9 +121,20 @@ struct KernelTable {
                            std::size_t n_out, std::size_t n_in);
 };
 
-// The table in use. Scalar until runtime dispatch lands.
+// The scalar reference table, the baseline every optimized table is tested against and the
+// table the kernel fixture tests exercise.
 const KernelTable& kernels();
-// Always the scalar reference, the baseline every optimized table is tested against.
 const KernelTable& scalar_kernels();
+
+enum class KernelSet : std::uint8_t { Auto, Scalar, Neon };
+
+// The table for a set. Auto picks the best the host supports: Neon on an arm64 machine with
+// the dot product extension, Scalar otherwise. Asking for Neon on a host without it is an
+// error, never a silent fallback.
+Expected<const KernelTable*> select(KernelSet set);
+// "scalar" or "neon", for banners and benchmark records.
+std::string_view name(const KernelTable& table);
+// Parses "auto", "scalar" or "neon".
+bool parse_kernel_set(std::string_view text, KernelSet& out);
 
 }  // namespace axon::kernels
