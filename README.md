@@ -1,6 +1,6 @@
 # axon-infer
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![C++20](https://img.shields.io/badge/C%2B%2B-20-informational) ![Platform](https://img.shields.io/badge/platform-macOS%20arm64-lightgrey)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![C++20](https://img.shields.io/badge/C%2B%2B-20-informational) ![Platform](https://img.shields.io/badge/platform-macOS%20arm64%20%7C%20NEON-lightgrey)
 
 LLM inference engine in C++20, built from scratch. It loads GGUF models from the LLaMA family and runs them on CPU with memory-mapped weights, quantized matmuls, a KV cache, a chat template renderer and a seeded sampler. No ggml, BLAS, OpenMP or other ML runtime. Every component is checked against a reference implementation, and every optimization is benchmarked so you can see what it buys.
 
@@ -24,13 +24,14 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** The kernels are scalar, so a 1B model decodes at about eight tokens per second on eight threads and the F16 path is far slower than the integer path. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
+**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on small models is bound by per-launch overhead rather than bandwidth, which the fused kernels address next. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
 
 ## Features
 
 - **GGUF loader** over a read-only memory mapping, validating every offset and length before any accessor can be called, fuzzed with a deterministic corruption replay and a libFuzzer target.
 - **Tokenizers** built entirely from GGUF metadata: byte-level BPE with the GPT-2, Llama 3 and Qwen2 pre-tokenizer patterns, and SentencePiece BPE with byte fallback, plus NFC normalization and a streaming decoder that never emits a partial UTF-8 sequence.
 - **Forward pass** on a table of kernels with a scalar reference for each, activations from one arena sized at load, and no heap allocation per token. Threads split matmul columns and attention heads so that logits are bit-identical at any thread count.
+- **NEON kernels** selected at load from the CPU's features, with `--force-scalar` to run the reference table instead. The integer-dot matmuls and activation quantization are bit-identical to the scalar kernels, so every quantized number is reproducible on either table. The float matmuls are held to a locked tolerance of 8e-7.
 - **Quantized weights** in Q8_0, Q4_0, Q4_1 and Q6_K, dequantized inside the matmul, with activations quantized to Q8_0 blocks for an integer dot product or kept in float for comparison.
 - **KV cache** with prefill, single-token decode and truncation, bit-identical to the cache-free forward.
 - **Sampler** with temperature, top-k, top-p, min-p and a repetition penalty, on a seeded generator that reproduces across platforms.
@@ -58,7 +59,7 @@ Weight formats:
 
 Models exercised by the test suite: SmolLM2-135M-Instruct (F16, Q8_0, Q4_0), TinyLlama-1.1B-Chat (Q4_0), Llama-3.2-1B-Instruct (Q4_0) and Qwen2.5-0.5B-Instruct (Q4_0). All four chat. The "Q4_0" files published for these models also contain Q4_1, Q8_0 and Q6_K tensors, which is why those formats are supported.
 
-Platforms: developed and benchmarked on macOS arm64 (Apple M1). The code is portable C++20 with no platform-specific kernels yet, and Linux x86-64 builds are untested.
+Platforms: developed and benchmarked on macOS arm64 (Apple M1), where the NEON table is used when the CPU reports the dot product extension. The rest is portable C++20 that falls back to the scalar table, and Linux x86-64 builds are untested.
 
 ## Architecture
 
@@ -106,7 +107,7 @@ Germany also has its own capital city, Berlin. However, it's not the same as Par
 [prompt 92 tokens (76 reused), first token in 3.92 s, decode 40 tokens in 9.78 s (4.09 tok/s), cache 131 positions (5.8 MB of 90.0 MB), peak rss 273 MB, seed 15111573243193277517]
 ```
 
-`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
+`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. `--force-scalar` runs the scalar reference kernels for comparison. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
 
 ### Generate
 
@@ -197,13 +198,13 @@ Every preset runs the unit tests: debug, release, AddressSanitizer with Undefine
 
 ## Benchmarks
 
-Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes a JSON file per run under `bench/results/` with the host, compiler, commit, model SHA256 and load average, and the tables here are the output of `bench/render_tables.py` over those files. The method: a fixed 512-token prompt cut from the committed WikiText-2 text, 128 generated tokens, one warm-up, the median of five runs. All runs are on an Apple M1 (four performance and four efficiency cores, 68.25 GB/s peak memory bandwidth) with the scalar kernels.
+Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes a JSON file per run under `bench/results/` with the host, compiler, commit, model SHA256, kernel table and load average, and the tables here are the output of `bench/render_tables.py` over those files. The method: a fixed 512-token prompt cut from the committed WikiText-2 text, 128 generated tokens, one warm-up, the median of five runs. All runs are on an Apple M1 (four performance and four efficiency cores, 68.25 GB/s peak memory bandwidth).
 
 ```
 $ ./build/release/apps/axon/axon bench -m models/SmolLM2-135M-Instruct-Q8_0.gguf --threads 4
 ```
 
-The `06a-static` step split work statically across threads and the `06a-threads` step claims it in chunks. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
+The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, and `06b-neon` runs the NEON kernel table. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
 
 | Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |
 |---|---|---|---|---|---|---|
@@ -228,56 +229,57 @@ The `06a-static` step split work statically across threads and the `06a-threads`
 | 06a-threads | SmolLM2-135M-Instruct-f16 | 2 | 8.1 | 7.64 | 2.06 | 3% |
 | 06a-threads | SmolLM2-135M-Instruct-f16 | 4 | 13.6 | 12.73 | 3.42 | 5% |
 | 06a-threads | SmolLM2-135M-Instruct-f16 | 8 | 17.2 | 14.80 | 3.98 | 6% |
+| 06b-neon | Llama-3.2-1B-Instruct-Q4_0 | 1 | 13.8 | 12.39 | 9.48 | 14% |
+| 06b-neon | Llama-3.2-1B-Instruct-Q4_0 | 4 | 41.7 | 33.41 | 25.56 | 37% |
+| 06b-neon | Llama-3.2-1B-Instruct-Q4_0 | 8 | 51.0 | 33.20 | 25.40 | 37% |
+| 06b-neon | SmolLM2-135M-Instruct-Q8_0 | 1 | 184.1 | 96.56 | 13.81 | 20% |
+| 06b-neon | SmolLM2-135M-Instruct-Q8_0 | 2 | 328.4 | 114.73 | 16.41 | 24% |
+| 06b-neon | SmolLM2-135M-Instruct-Q8_0 | 4 | 526.2 | 113.36 | 16.21 | 24% |
+| 06b-neon | SmolLM2-135M-Instruct-Q8_0 | 8 | 634.0 | 59.25 | 8.47 | 12% |
+| 06b-neon | SmolLM2-135M-Instruct-f16 | 1 | 55.2 | 44.32 | 11.93 | 17% |
+| 06b-neon | SmolLM2-135M-Instruct-f16 | 2 | 105.3 | 72.09 | 19.40 | 28% |
+| 06b-neon | SmolLM2-135M-Instruct-f16 | 4 | 171.5 | 92.01 | 24.76 | 36% |
+| 06b-neon | SmolLM2-135M-Instruct-f16 | 8 | 231.1 | 69.57 | 18.72 | 27% |
 
-Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06a-threads, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 55.4 | 45.07 | 1.00x | 1.00x |
-| 2 | 104.1 | 72.00 | 1.88x | 1.60x |
-| 4 | 188.9 | 88.47 | 3.41x | 1.96x |
-| 8 | 238.9 | 59.05 | 4.31x | 1.31x |
-
-Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06a-threads, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 4.1 | 4.08 | 1.00x | 1.00x |
-| 2 | 8.1 | 7.64 | 1.97x | 1.87x |
-| 4 | 13.6 | 12.73 | 3.28x | 3.12x |
-| 8 | 17.2 | 14.80 | 4.16x | 3.63x |
-
-Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06a-threads, relative to 1 thread(s):
+Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06b-neon, relative to 1 thread(s):
 
 | Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
 |---|---|---|---|---|
-| 1 | 1.9 | 1.89 | 1.00x | 1.00x |
-| 4 | 6.4 | 6.17 | 3.38x | 3.26x |
-| 8 | 8.6 | 7.90 | 4.51x | 4.18x |
+| 1 | 13.8 | 12.39 | 1.00x | 1.00x |
+| 4 | 41.7 | 33.41 | 3.01x | 2.70x |
+| 8 | 51.0 | 33.20 | 3.69x | 2.68x |
 
-Two things the tables show. The integer path on Q8_0 decodes ten times faster than the F16 path on one thread, 45 against 4 tokens per second, before any SIMD work. And eight threads only pay off when each matmul is large enough to amortise the launch: on the 1B model eight threads beat four, on the 135M model four threads win decode because its matmuls are microseconds of work and the efficiency cores and the launch cost dominate. Prefill, which runs many rows per launch, scales further than decode everywhere. The gap to peak bandwidth is the headroom the SIMD kernels are for.
+Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06b-neon, relative to 1 thread(s):
 
-Scalar matmul on one thread, the kernel that dominates decode:
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 184.1 | 96.56 | 1.00x | 1.00x |
+| 2 | 328.4 | 114.73 | 1.78x | 1.19x |
+| 4 | 526.2 | 113.36 | 2.86x | 1.17x |
+| 8 | 634.0 | 59.25 | 3.44x | 0.61x |
 
-| Weights | Shape (out x in) | GFLOP/s | GB/s |
-|---|---|---|---|
-| F32 | 1536 x 576 | 2.6 | 5.2 |
-| F32 | 2048 x 2048 | 2.1 | 4.3 |
-| F32 | 8192 x 2048 | 2.2 | 4.4 |
-| F16 | 1536 x 576 | 1.1 | 1.1 |
-| F16 | 2048 x 2048 | 1.1 | 1.1 |
-| F16 | 8192 x 2048 | 1.1 | 1.1 |
+Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06b-neon, relative to 1 thread(s):
 
-Quantized matmul, 2048 x 2048, dequantizing inside the kernel:
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 55.2 | 44.32 | 1.00x | 1.00x |
+| 2 | 105.3 | 72.09 | 1.91x | 1.63x |
+| 4 | 171.5 | 92.01 | 3.11x | 2.08x |
+| 8 | 231.1 | 69.57 | 4.19x | 1.57x |
 
-| Weights | Activations | GFLOP/s | GB/s of weights |
-|---|---|---|---|
-| Q8_0 | float | 1.6 | 0.8 |
-| Q8_0 | Q8_0 integer dot | 17.9 | 9.5 |
-| Q4_0 | float | 1.5 | 0.4 |
-| Q4_0 | Q8_0 integer dot | 14.5 | 4.1 |
+What the tables show. On Llama 3.2 1B the NEON table took decode from 1.9 to 12.4 tokens per second on one thread and to 33 on eight, reaching 37 percent of the machine's bandwidth. Most of that step came from one kernel: the file stores its tied output matrix as Q6_K, which alone cost 392 of the 433 ms per token on the scalar path. On SmolLM2 the picture is different: a 135M model's matmuls are microseconds of work, so decode stops scaling past two threads and the per-launch overhead sets the ceiling. That is the next lever. Prefill, with many rows per launch, scales to eight threads on every model.
 
-The integer path is ten times faster than the float path in the same scalar source, because the compiler vectorizes the int8 inner loop on its own. It is the default for quantized weights and the path the SIMD work builds on.
+Kernel rows, one thread, scalar against NEON on the same shapes:
+
+| Kernel | Shape (out x in) | Scalar GFLOP/s | NEON GFLOP/s | Scalar GB/s | NEON GB/s |
+|---|---|---|---|---|---|
+| F32 matmul | 2048 x 2048 | 2.3 | 24.3 | 4.5 | 48.6 |
+| F16 matmul | 2048 x 2048 | 1.1 | 13.9 | 1.1 | 13.9 |
+| Q8_0 matmul, Q8_0 activations | 2048 x 2048 | 18.7 | 81.3 | 10.0 | 43.2 |
+| Q4_0 matmul, Q8_0 activations | 2048 x 2048 | 15.1 | 63.1 | 4.3 | 17.8 |
+| Q6_K matmul, float activations | 2048 x 2048 | 1.4 | 14.7 | 0.6 | 6.0 |
+
+The scalar integer rows are already auto-vectorized by the compiler, which is why the NEON gain there is four times rather than ten. The integer kernels keep the scalar kernel's per-block accumulation order and are bit-identical to it, which is a locked test. The float kernels differ by reduction order within 8e-7, measured first and locked at four times the measurement.
 
 ### Quantization accuracy
 
@@ -316,10 +318,23 @@ A 135M model loses a lot to Q4_0. That is a property of the model and the format
 | m1-06a-threads-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
 | m1-06a-threads-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
 | m1-06a-threads-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 7569e589a155 | 2026-10-04 | f535f83ec568 |
+| m1-06b-neon-Llama-3.2-1B-Instruct-Q4_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | d000fa7ba6b7 (dirty) | 2026-10-10 | fa0390e7c043 |
+| m1-06b-neon-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | d000fa7ba6b7 (dirty) | 2026-10-10 | fa0390e7c043 |
+| m1-06b-neon-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | d000fa7ba6b7 (dirty) | 2026-10-10 | fa0390e7c043 |
+| m1-06b-neon-SmolLM2-135M-Instruct-Q8_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | 5a1395716f79 |
+| m1-06b-neon-SmolLM2-135M-Instruct-Q8_0-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | 5a1395716f79 |
+| m1-06b-neon-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | 5a1395716f79 |
+| m1-06b-neon-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | 5a1395716f79 |
+| m1-06b-neon-SmolLM2-135M-Instruct-f16-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
+| m1-06b-neon-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
+| m1-06b-neon-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
+| m1-06b-neon-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
 
 ## Design notes
 
 ### Kernels
+
+Two tables implement the same interface. The scalar table is the reference, plain loops written to be read, and the NEON table overrides the matmuls and activation quantization with intrinsics compiled only into those files, with the dot product and half-precision extensions enabled there alone. The table is chosen at load from the CPU's reported features and can be forced to scalar on any command. RMSNorm, SiLU and softmax stay scalar on purpose: they are under one part in a thousand of a token's arithmetic, and keeping them scalar is what keeps the quantized models bit-identical across tables.
 
 Every operation the forward pass needs lives behind one table of function pointers: matmul for F32, F16 and BF16 weights (single vector and multi-row), RMSNorm, RoPE (adjacent-pair and NeoX layouts, with the Llama 3.x per-dimension frequency factors), softmax, SwiGLU, embedding lookup and causal attention with grouped-query heads, over a whole sequence or over a cache. The scalar implementations under `src/kernels/ref/` are the reference: plain loops, sequential float accumulation, written to be read. Optimized tables slot in without touching any call site and are tested against the scalar one.
 
