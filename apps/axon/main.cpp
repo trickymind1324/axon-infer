@@ -195,6 +195,7 @@ struct GenerateCli {
   std::size_t ctx = 2048;
   int threads = 0;
   bool force_scalar = false;
+  std::string cache = "f32";
   bool no_cache = false;
   bool no_bos = false;
   bool stats = false;
@@ -255,11 +256,13 @@ int run_generate(const GenerateCli& opt) {
   const std::size_t ctx = use_cache ? opt.ctx : opt.max_seq;
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, ctx),
-                  .max_ctx = ctx,
-                  .n_threads = opt.threads,
-                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
-                                              : axon::kernels::KernelSet::Auto});
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, ctx),
+       .max_ctx = ctx,
+       .n_threads = opt.threads,
+       .kernels =
+           opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+       .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -314,6 +317,7 @@ struct ChatCli {
   int max_tokens = 256;
   int threads = 0;
   bool force_scalar = false;
+  std::string cache = "f32";
   bool stats = false;
   SamplingCli sampling;
 };
@@ -321,11 +325,13 @@ struct ChatCli {
 int run_chat(const ChatCli& opt) {
   const auto t_load = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, opt.ctx),
-                  .max_ctx = opt.ctx,
-                  .n_threads = opt.threads,
-                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
-                                              : axon::kernels::KernelSet::Auto});
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, opt.ctx),
+       .max_ctx = opt.ctx,
+       .n_threads = opt.threads,
+       .kernels =
+           opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+       .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -426,6 +432,7 @@ struct BenchCli {
   int threads = 0;
   int spin_budget_us = axon::ThreadPoolOptions::kDefaultSpinBudgetUs;
   bool force_scalar = false;
+  std::string cache = "f32";
   bool json = false;
 };
 
@@ -439,12 +446,14 @@ int run_bench(const BenchCli& opt) {
   }
   const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, opt.ctx),
-                  .max_ctx = opt.ctx,
-                  .n_threads = opt.threads,
-                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
-                                              : axon::kernels::KernelSet::Auto,
-                  .spin_budget_us = opt.spin_budget_us});
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, opt.ctx),
+       .max_ctx = opt.ctx,
+       .n_threads = opt.threads,
+       .kernels =
+           opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+       .spin_budget_us = opt.spin_budget_us,
+       .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -530,6 +539,8 @@ int run(int argc, char** argv) {
       ->default_val(0);
   gen->add_flag("--force-scalar", generate.force_scalar,
                 "use the scalar reference kernels instead of the best the CPU supports");
+  gen->add_option("--cache", generate.cache, "key/value cache storage, f32 or f16")
+      ->default_str("f32");
   gen->add_flag("--no-cache", generate.no_cache,
                 "recompute the whole sequence every step instead of using the cache (greedy)");
   gen->add_flag("--no-bos", generate.no_bos, "do not prepend the BOS token");
@@ -551,6 +562,7 @@ int run(int argc, char** argv) {
       ->default_val(0);
   ch->add_flag("--force-scalar", chat.force_scalar,
                "use the scalar reference kernels instead of the best the CPU supports");
+  ch->add_option("--cache", chat.cache, "key/value cache storage, f32 or f16")->default_str("f32");
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
   add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 
@@ -570,6 +582,7 @@ int run(int argc, char** argv) {
       ->default_val(0);
   be->add_flag("--force-scalar", bench.force_scalar,
                "use the scalar reference kernels instead of the best the CPU supports");
+  be->add_option("--cache", bench.cache, "key/value cache storage, f32 or f16")->default_str("f32");
   be->add_option("--spin-budget-us", bench.spin_budget_us,
                  "microseconds an idle worker spins before sleeping")
       ->default_val(axon::ThreadPoolOptions::kDefaultSpinBudgetUs);

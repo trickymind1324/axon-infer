@@ -49,6 +49,7 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
   result.generated_tokens = static_cast<std::size_t>(opts.generate);
   result.threads = model.n_threads();
   result.kernels = std::string(kernels::name(model.table()));
+  result.cache = model.cache_type() == model::CacheType::F16 ? "f16" : "f32";
   result.context = model.max_ctx();
   result.spin_budget_us = static_cast<int>(model.pool().spin_budget().count());
   result.load_average_before = load_average();
@@ -127,8 +128,8 @@ std::string bench_json(const BenchResult& r, std::string_view model_file,
         i == 0 ? "" : ", ", r.runs[i].prefill_s, r.runs[i].decode_s, r.runs[i].peak_rss_mb);
   }
   return fmt::format(
-      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "threads": {}, "context": {}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
-      model_file, description, r.kernels, r.threads, r.context, r.spin_budget_us,
+      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "cache": "{}", "threads": {}, "context": {}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
+      model_file, description, r.kernels, r.cache, r.threads, r.context, r.spin_budget_us,
       r.launches_per_token, r.prompt_tokens, r.generated_tokens, r.runs.size(),
       r.prefill_tok_s_median, r.prefill_tok_s_best, r.decode_tok_s_median, r.decode_tok_s_best,
       r.weight_bytes_per_token, r.cache_bytes_per_token, r.weight_gb_s_median, r.peak_rss_mb,

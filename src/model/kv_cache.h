@@ -5,10 +5,9 @@
 #include "model/config.h"
 
 #include <cstddef>
+#include <cstdint>
 
 namespace axon::model {
-
-enum class CacheType { F32 };  // F16 is reserved for a later memory pass
 
 // Keys and values for every layer, preallocated for max_ctx positions and filled in order.
 // Layout per layer is [max_ctx][n_head_kv][head_dim], the same shape the attention kernel
@@ -19,11 +18,29 @@ class KVCache {
 public:
   KVCache(const LlamaConfig& cfg, std::size_t max_ctx, CacheType type = CacheType::F32);
 
-  // Layer l's rows. The first pos() rows are live.
-  [[nodiscard]] float* k(std::size_t layer) noexcept { return layer_base(layer, 0); }
-  [[nodiscard]] float* v(std::size_t layer) noexcept { return layer_base(layer, 1); }
-  [[nodiscard]] const float* k(std::size_t layer) const noexcept { return layer_base(layer, 0); }
-  [[nodiscard]] const float* v(std::size_t layer) const noexcept { return layer_base(layer, 1); }
+  // Layer l's rows, F32 cache only. The first pos() rows are live.
+  [[nodiscard]] float* k(std::size_t layer) noexcept {
+    return static_cast<float*>(layer_base(layer, 0));
+  }
+  [[nodiscard]] float* v(std::size_t layer) noexcept {
+    return static_cast<float*>(layer_base(layer, 1));
+  }
+  [[nodiscard]] const float* k(std::size_t layer) const noexcept {
+    return static_cast<const float*>(layer_base(layer, 0));
+  }
+  [[nodiscard]] const float* v(std::size_t layer) const noexcept {
+    return static_cast<const float*>(layer_base(layer, 1));
+  }
+  // Layer l's rows as fp16 bit patterns, F16 cache only.
+  [[nodiscard]] std::uint16_t* k16(std::size_t layer) noexcept {
+    return static_cast<std::uint16_t*>(layer_base(layer, 0));
+  }
+  [[nodiscard]] std::uint16_t* v16(std::size_t layer) noexcept {
+    return static_cast<std::uint16_t*>(layer_base(layer, 1));
+  }
+  [[nodiscard]] std::size_t element_bytes() const noexcept {
+    return type_ == CacheType::F16 ? 2 : 4;
+  }
 
   [[nodiscard]] std::size_t pos() const noexcept { return pos_; }
   [[nodiscard]] std::size_t max_ctx() const noexcept { return max_ctx_; }
@@ -31,7 +48,7 @@ public:
   [[nodiscard]] std::size_t row_floats() const noexcept { return row_; }  // n_head_kv * head_dim
   [[nodiscard]] std::size_t bytes() const noexcept { return storage_.capacity(); }
   [[nodiscard]] std::size_t live_bytes() const noexcept {
-    return n_layer_ * 2 * pos_ * row_ * sizeof(float);
+    return n_layer_ * 2 * pos_ * row_ * element_bytes();
   }
   [[nodiscard]] CacheType type() const noexcept { return type_; }
   // Whether this cache was built for a model with the same layer count and kv row width.
@@ -44,7 +61,7 @@ public:
   void advance(std::size_t n);
 
 private:
-  float* layer_base(std::size_t layer, std::size_t which) const noexcept;
+  void* layer_base(std::size_t layer, std::size_t which) const noexcept;
 
   std::size_t n_layer_;
   std::size_t max_ctx_;
@@ -52,7 +69,7 @@ private:
   std::size_t pos_ = 0;
   CacheType type_;
   Arena storage_;
-  float* base_;
+  std::byte* base_;
 };
 
 }  // namespace axon::model

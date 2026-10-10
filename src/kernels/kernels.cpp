@@ -28,6 +28,7 @@ constexpr KernelTable kScalarTable{
     .attention = ref::attention,
     .attention_kv = ref::attention_kv,
     .attention_kv_heads = ref::attention_kv_heads,
+    .attention_kv_heads_f16 = ref::attention_kv_heads_f16,
     .matmul_q8_0 = ref::matmul_q8_0,
     .matmul_q4_0 = ref::matmul_q4_0,
     .matmul_q8_0_q8 = ref::matmul_q8_0_q8,

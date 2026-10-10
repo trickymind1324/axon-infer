@@ -26,6 +26,7 @@ struct Options {
   bool exact_activations = false;
   int threads = 0;
   bool force_scalar = false;
+  std::string cache = "f32";
   bool json = false;
 };
 
@@ -44,6 +45,7 @@ int run(int argc, char** argv) {
   app.add_option("--threads,-t", opt.threads, "threads for the forward pass, 0 for one per core")
       ->default_val(0);
   app.add_flag("--force-scalar", opt.force_scalar, "use the scalar reference kernels");
+  app.add_option("--cache", opt.cache, "key/value cache storage, f32 or f16")->default_str("f32");
   app.add_flag("--json", opt.json, "print one JSON object instead of text");
   CLI11_PARSE(app, argc, argv);
 
@@ -56,12 +58,14 @@ int run(int argc, char** argv) {
 
   const auto t0 = std::chrono::steady_clock::now();
   auto loaded = axon::model::LlamaModel::load(
-      opt.model, {.max_seq = std::min(opt.max_seq, opt.chunk_size),
-                  .max_ctx = opt.chunk_size,
-                  .exact_activations = opt.exact_activations,
-                  .n_threads = opt.threads,
-                  .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
-                                              : axon::kernels::KernelSet::Auto});
+      opt.model,
+      {.max_seq = std::min(opt.max_seq, opt.chunk_size),
+       .max_ctx = opt.chunk_size,
+       .exact_activations = opt.exact_activations,
+       .n_threads = opt.threads,
+       .kernels =
+           opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+       .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;

@@ -34,6 +34,9 @@ struct LoadOptions {
   kernels::KernelSet kernels = kernels::KernelSet::Auto;
   // Microseconds an idle worker thread spins before sleeping, see ThreadPoolOptions.
   int spin_budget_us = ThreadPoolOptions::kDefaultSpinBudgetUs;
+  // Key/value cache storage. F32 keeps cached decoding bit-identical to the cache-free pass.
+  // F16 halves the cache and rounds each key and value once when it is written.
+  CacheType cache = CacheType::F32;
 };
 
 struct ForwardOptions {
@@ -68,7 +71,8 @@ public:
   Expected<std::span<const float>> forward_one(KVCache& cache, std::int32_t token);
 
   // A cache sized for this model's max_ctx.
-  [[nodiscard]] KVCache new_cache() const { return KVCache(cfg_, max_ctx_); }
+  [[nodiscard]] KVCache new_cache() const { return KVCache(cfg_, max_ctx_, cache_type_); }
+  [[nodiscard]] CacheType cache_type() const noexcept { return cache_type_; }
 
   [[nodiscard]] const LlamaConfig& config() const noexcept { return cfg_; }
   [[nodiscard]] const LlamaWeights& weights() const noexcept { return weights_; }
@@ -98,6 +102,7 @@ private:
   LlamaWeights weights_;
   std::size_t max_seq_;
   std::size_t max_ctx_;
+  CacheType cache_type_;
   bool exact_activations_;
   const kernels::KernelTable* kernels_;
   ThreadPool pool_;

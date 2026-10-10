@@ -139,11 +139,12 @@ LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer
                        LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
-      exact_activations_(options.exact_activations), kernels_(table),
+      cache_type_(options.cache), exact_activations_(options.exact_activations), kernels_(table),
       pool_(ThreadPoolOptions{.n_threads = options.n_threads,
                               .spin_budget = std::chrono::microseconds(options.spin_budget_us)}),
       weight_bytes_(sum_weight_bytes(weights_, cfg_)),
-      arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()))) {}
+      arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()),
+                                   cache_type_)) {}
 
 Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::path& path,
                                                        LoadOptions options) {
@@ -235,6 +236,10 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
       return make_error(ErrorCode::InvalidArgument,
                         "forward: the cache was built for a different model");
     }
+    if (cache->type() != cache_type_) {
+      return make_error(ErrorCode::InvalidArgument,
+                        "forward: the cache type does not match the one the model was loaded with");
+    }
     if (n_past + seq > cache->max_ctx()) {
       return make_error(ErrorCode::InvalidArgument,
                         fmt::format("context overflow: {} cached + {} new tokens exceed {}", n_past,
@@ -261,8 +266,12 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
           weights_.rope_freqs ? static_cast<const float*>(weights_.rope_freqs->data) : nullptr};
   const float scale = 1.0F / std::sqrt(static_cast<float>(head_dim));
 
+  // An fp16 cache needs float staging rows for the new keys and values, like the cache-free
+  // pass, before they are rounded into the cache.
+  const bool half_cache = cache != nullptr && cache->type() == CacheType::F16;
   arena_.reset();
-  Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr, n_threads);
+  Activations a =
+      allocate_activations(arena_, cfg_, seq, total, cache == nullptr || half_cache, n_threads);
 
   // Quantizes the activation rows once per input that feeds quantized weights: inline for a
   // single row (decode), as one launch for prefill. Returns whether the scratch is in use.
@@ -354,10 +363,12 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     const LayerWeights& w = weights_.layers[l];
     const bool dump_this = dumping && opts.dump_layer == l;
     // Where this call's keys and values go, and where the attention reads all of them from.
-    float* k_base = cache != nullptr ? cache->k(l) : a.k.data();
-    float* v_base = cache != nullptr ? cache->v(l) : a.v.data();
-    float* k_new = k_base + n_past * kv_row;
-    float* v_new = v_base + n_past * kv_row;
+    // With an fp16 cache the new rows are staged in float and rounded in after RoPE.
+    const bool direct = cache != nullptr && !half_cache;
+    float* k_base = direct ? cache->k(l) : a.k.data();
+    float* v_base = direct ? cache->v(l) : a.v.data();
+    float* k_new = direct ? k_base + n_past * kv_row : a.k.data();
+    float* v_new = direct ? v_base + n_past * kv_row : a.v.data();
     AXON_DUMP(dump_this, "x_in", a.x);
 
     rmsnorm_rows(k, a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
@@ -379,11 +390,25 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     AXON_DUMP(dump_this, "q", a.q);
     AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
     AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
-    pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
-      float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
-      k.attention_kv_heads(a.q.data(), k_base, v_base, a.attn.data(), scores, seq, n_past, n_head,
-                           n_head_kv, head_dim, scale, begin, end);
-    });
+    if (half_cache) {
+      std::uint16_t* k16 = cache->k16(l) + n_past * kv_row;
+      std::uint16_t* v16 = cache->v16(l) + n_past * kv_row;
+      for (std::size_t i = 0; i < seq * kv_row; ++i) {
+        k16[i] = fp32_to_fp16(k_new[i]);
+        v16[i] = fp32_to_fp16(v_new[i]);
+      }
+      pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
+        float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
+        k.attention_kv_heads_f16(a.q.data(), cache->k16(l), cache->v16(l), a.attn.data(), scores,
+                                 seq, n_past, n_head, n_head_kv, head_dim, scale, begin, end);
+      });
+    } else {
+      pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
+        float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
+        k.attention_kv_heads(a.q.data(), k_base, v_base, a.attn.data(), scores, seq, n_past, n_head,
+                             n_head_kv, head_dim, scale, begin, end);
+      });
+    }
     AXON_DUMP(dump_this, "attn_out", a.attn);
     mm(w.wo, a.attn.data(), a.h.data());
     add_rows(a.x, a.h);

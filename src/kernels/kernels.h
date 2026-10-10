@@ -77,6 +77,12 @@ struct KernelTable {
                              float* scores, std::size_t n_q, std::size_t n_past, std::size_t n_head,
                              std::size_t n_head_kv, std::size_t head_dim, float scale,
                              std::size_t head_begin, std::size_t head_end);
+  // The same over a cache stored as fp16 bit patterns, widened as they are read.
+  void (*attention_kv_heads_f16)(const float* q, const std::uint16_t* k_cache,
+                                 const std::uint16_t* v_cache, float* out, float* scores,
+                                 std::size_t n_q, std::size_t n_past, std::size_t n_head,
+                                 std::size_t n_head_kv, std::size_t head_dim, float scale,
+                                 std::size_t head_begin, std::size_t head_end);
 
   // Quantized weights, F32 activations: y[o] = sum_i dequant(w[o][i]) * x[i], sequential in
   // float. n_in is a multiple of 32.

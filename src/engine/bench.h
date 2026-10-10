@@ -34,6 +34,7 @@ struct BenchResult {
   std::size_t generated_tokens = 0;
   int threads = 0;
   std::string kernels;  // table name, "scalar" or "neon"
+  std::string cache;    // "f32" or "f16"
   std::size_t context = 0;
   int spin_budget_us = 0;
   double launches_per_token = 0.0;  // parallel launches per decoded token
