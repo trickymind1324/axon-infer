@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -263,28 +264,76 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   arena_.reset();
   Activations a = allocate_activations(arena_, cfg_, seq, total, cache == nullptr, n_threads);
 
-  // Y[seq][n_out] = X[seq][n_in] W^T with output columns split across threads.
-  const auto mm = [&](const Tensor& w, const float* x, float* y) {
+  // Quantizes the activation rows once per input that feeds quantized weights: inline for a
+  // single row (decode), as one launch for prefill. Returns whether the scratch is in use.
+  const auto quantize_input = [&](const float* x, const Tensor& w) {
+    if (!needs_q8_activations(w, exact_activations_)) {
+      return false;
+    }
     const auto n_in = static_cast<std::size_t>(w.ne0);
-    const auto n_out = static_cast<std::size_t>(w.ne1);
     const std::size_t nb = n_in / kQK8_0;
-    const bool quantize = needs_q8_activations(w, exact_activations_);
-    if (quantize) {
+    if (seq == 1) {
+      k.quantize_row_q8_0(x, a.xq.data(), n_in);
+    } else {
       pool_.parallel_for(0, seq, 4, [&](std::size_t begin, std::size_t end, int) {
         for (std::size_t r = begin; r < end; ++r) {
           k.quantize_row_q8_0(x + r * n_in, a.xq.data() + r * nb, n_in);
         }
       });
     }
-    // About eight chunks per thread: enough to balance fast and slow cores, few enough that
-    // the atomic claim per chunk is noise next to the columns it covers.
-    const std::size_t chunk = std::max<std::size_t>(16, n_out / (n_threads * 8));
-    pool_.parallel_for(0, n_out, chunk, [&](std::size_t begin, std::size_t end, int) {
-      for (std::size_t r = 0; r < seq; ++r) {
-        matmul_columns(k, w, x + r * n_in, quantize ? a.xq.data() + r * nb : nullptr, y + r * n_out,
-                       begin, end, exact_activations_);
+    return true;
+  };
+
+  // About eight chunks per thread: enough to balance fast and slow cores, few enough that
+  // the atomic claim per chunk is noise next to the columns it covers.
+  const auto chunk_for = [&](std::size_t columns) {
+    return std::max<std::size_t>(16, columns / (n_threads * 8));
+  };
+
+  // Y[seq][n_out] = X[seq][n_in] W^T for one weight, or for several weights that share the
+  // input row, as one launch over the union of their output columns. A chunk that spans a
+  // boundary runs the kernel once per segment, so every output element is still computed by
+  // the same kernel on the same data as it would be alone.
+  struct Segment {
+    const Tensor* w;
+    float* y;
+  };
+  const auto mm_fused = [&](std::span<const Segment> segments, const float* x) {
+    const auto n_in = static_cast<std::size_t>(segments[0].w->ne0);
+    const std::size_t nb = n_in / kQK8_0;
+    bool quantized = false;
+    for (const auto& seg : segments) {
+      AXON_DCHECK(static_cast<std::size_t>(seg.w->ne0) == n_in,
+                  "fused matmul: input widths differ");
+      quantized = quantize_input(x, *seg.w) || quantized;
+      if (quantized) {
+        break;  // one input, quantized once
       }
-    });
+    }
+    std::size_t total_columns = 0;
+    for (const auto& seg : segments) {
+      total_columns += static_cast<std::size_t>(seg.w->ne1);
+    }
+    pool_.parallel_for(
+        0, total_columns, chunk_for(total_columns), [&](std::size_t begin, std::size_t end, int) {
+          std::size_t offset = 0;
+          for (const auto& seg : segments) {
+            const auto n_out = static_cast<std::size_t>(seg.w->ne1);
+            const std::size_t lo = std::max(begin, offset);
+            const std::size_t hi = std::min(end, offset + n_out);
+            if (lo < hi) {
+              for (std::size_t r = 0; r < seq; ++r) {
+                matmul_columns(k, *seg.w, x + r * n_in, quantized ? a.xq.data() + r * nb : nullptr,
+                               seg.y + r * n_out, lo - offset, hi - offset, exact_activations_);
+              }
+            }
+            offset += n_out;
+          }
+        });
+  };
+  const auto mm = [&](const Tensor& w, const float* x, float* y) {
+    const Segment one[] = {{.w = &w, .y = y}};
+    mm_fused(one, x);
   };
 
 #define AXON_DUMP(wanted, name, span)                                                              \
@@ -313,9 +362,11 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
     rmsnorm_rows(k, a.x, w.attn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "attn_norm_out", a.h);
-    mm(w.wq, a.h.data(), a.q.data());
-    mm(w.wk, a.h.data(), k_new);
-    mm(w.wv, a.h.data(), v_new);
+    {
+      const Segment qkv[] = {
+          {.w = &w.wq, .y = a.q.data()}, {.w = &w.wk, .y = k_new}, {.w = &w.wv, .y = v_new}};
+      mm_fused(qkv, a.h.data());
+    }
     if (w.bq && w.bk && w.bv) {
       add_bias(a.q.data(), *w.bq, seq);
       add_bias(k_new, *w.bk, seq);
@@ -340,9 +391,23 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
     rmsnorm_rows(k, a.x, w.ffn_norm, a.h, seq, cfg_.rms_eps);
     AXON_DUMP(dump_this, "ffn_norm_out", a.h);
-    mm(w.w_gate, a.h.data(), a.gate.data());
-    mm(w.w_up, a.h.data(), a.up.data());
-    k.silu_mul(a.gate.data(), a.up.data(), a.gate.data(), seq * n_ff);
+    {
+      // Gate and up as one launch over column pairs, with the SiLU product applied by the
+      // thread that just produced both halves of its chunk.
+      const bool quantized = quantize_input(a.h.data(), w.w_gate);
+      const std::size_t nb = n_embd / kQK8_0;
+      pool_.parallel_for(0, n_ff, chunk_for(n_ff), [&](std::size_t begin, std::size_t end, int) {
+        for (std::size_t r = 0; r < seq; ++r) {
+          const float* x = a.h.data() + r * n_embd;
+          const BlockQ8_0* xq = quantized ? a.xq.data() + r * nb : nullptr;
+          float* gate = a.gate.data() + r * n_ff;
+          float* up = a.up.data() + r * n_ff;
+          matmul_columns(k, w.w_gate, x, xq, gate, begin, end, exact_activations_);
+          matmul_columns(k, w.w_up, x, xq, up, begin, end, exact_activations_);
+          k.silu_mul(gate + begin, up + begin, gate + begin, end - begin);
+        }
+      });
+    }
     mm(w.w_down, a.gate.data(), a.h.data());
     AXON_DUMP(dump_this, "ffn_out", a.h);
     add_rows(a.x, a.h);
