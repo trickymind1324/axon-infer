@@ -4,6 +4,7 @@
 #include "core/cpu_info.h"
 #include "core/gguf.h"
 #include "core/log.h"
+#include "core/threadpool.h"
 
 #include "chat/template.h"
 #include "engine/bench.h"
@@ -423,6 +424,7 @@ struct BenchCli {
   std::size_t ctx = 2048;
   std::size_t max_seq = 128;
   int threads = 0;
+  int spin_budget_us = axon::ThreadPoolOptions::kDefaultSpinBudgetUs;
   bool force_scalar = false;
   bool json = false;
 };
@@ -441,7 +443,8 @@ int run_bench(const BenchCli& opt) {
                   .max_ctx = opt.ctx,
                   .n_threads = opt.threads,
                   .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
-                                              : axon::kernels::KernelSet::Auto});
+                                              : axon::kernels::KernelSet::Auto,
+                  .spin_budget_us = opt.spin_budget_us});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
     return 2;
@@ -567,6 +570,9 @@ int run(int argc, char** argv) {
       ->default_val(0);
   be->add_flag("--force-scalar", bench.force_scalar,
                "use the scalar reference kernels instead of the best the CPU supports");
+  be->add_option("--spin-budget-us", bench.spin_budget_us,
+                 "microseconds an idle worker spins before sleeping")
+      ->default_val(axon::ThreadPoolOptions::kDefaultSpinBudgetUs);
   be->add_flag("--json", bench.json, "print one JSON object");
   app.require_subcommand(0, 1);
   CLI11_PARSE(app, argc, argv);

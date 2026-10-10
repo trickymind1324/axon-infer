@@ -35,7 +35,9 @@ struct BenchResult {
   int threads = 0;
   std::string kernels;  // table name, "scalar" or "neon"
   std::size_t context = 0;
-  std::vector<BenchRun> runs;  // the measured runs, warm-up excluded
+  int spin_budget_us = 0;
+  double launches_per_token = 0.0;  // parallel launches per decoded token
+  std::vector<BenchRun> runs;       // the measured runs, warm-up excluded
   double prefill_tok_s_median = 0.0;
   double prefill_tok_s_best = 0.0;
   double decode_tok_s_median = 0.0;

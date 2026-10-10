@@ -124,3 +124,33 @@ TEST_CASE("default thread count is positive", "[core][threadpool]") {
   const axon::ThreadPool pool(0);
   CHECK(pool.size() >= 1);
 }
+
+TEST_CASE("workers spin for the budget and then sleep", "[core][threadpool][spin]") {
+  // A zero budget sleeps after every launch that leaves a gap.
+  axon::ThreadPool eager({.n_threads = 3, .spin_budget = std::chrono::microseconds(0)});
+  CHECK(eager.spin_budget().count() == 0);
+  std::atomic<int> hits{0};
+  for (int i = 0; i < 5; ++i) {
+    eager.parallel_for(0, 3, 0, [&](std::size_t, std::size_t, int) { hits.fetch_add(1); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  CHECK(hits.load() == 15);
+  CHECK(eager.launches() == 5);
+  CHECK(eager.sleeps() >= 8);  // two workers, at least four gaps each
+
+  // A generous budget covers short gaps without a single sleep.
+  axon::ThreadPool patient({.n_threads = 3, .spin_budget = std::chrono::milliseconds(50)});
+  for (int i = 0; i < 20; ++i) {
+    patient.parallel_for(0, 3, 0, [&](std::size_t, std::size_t, int) { hits.fetch_add(1); });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
+    while (std::chrono::steady_clock::now() < until) {
+    }
+  }
+  CHECK(hits.load() == 75);
+  CHECK(patient.sleeps() == 0);
+  // Past the budget the workers do go to sleep, so an idle process frees its cores.
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  CHECK(patient.sleeps() == 2);
+  patient.parallel_for(0, 3, 0, [&](std::size_t, std::size_t, int) { hits.fetch_add(1); });
+  CHECK(hits.load() == 78);
+}

@@ -4,16 +4,17 @@
 #include "core/cpu_info.h"
 
 #include <algorithm>
+#include <chrono>
 
 namespace axon {
 
 namespace {
 
-// Bounded spinning before blocking. Decode issues hundreds of small parallel_for calls per
-// token, and waking a sleeping thread through a condition variable costs tens of
-// microseconds. These constants are revisited with measurements in the performance phase.
-constexpr int kWorkerSpinIterations = 2000;
-constexpr int kCallerSpinIterations = 20000;
+// Workers spin for a wall-clock budget before blocking, long enough to cover the
+// single-threaded stretches between a token's launches and short enough that an idle process
+// frees its cores within a fraction of a millisecond. The caller spins ten times longer: it
+// has nothing else to do, and a sleeping caller would delay the next launch.
+constexpr int kClockCheckInterval = 64;  // relax iterations between clock reads
 
 inline void cpu_relax() {
 #if defined(__x86_64__)
@@ -27,7 +28,10 @@ inline void cpu_relax() {
 
 }  // namespace
 
-ThreadPool::ThreadPool(int n_threads) {
+ThreadPool::ThreadPool(int n_threads) : ThreadPool(ThreadPoolOptions{.n_threads = n_threads}) {}
+
+ThreadPool::ThreadPool(ThreadPoolOptions options) : spin_budget_(options.spin_budget) {
+  int n_threads = options.n_threads;
   if (n_threads <= 0) {
     n_threads = cpu_info().physical_cores;
   }
@@ -53,16 +57,23 @@ ThreadPool::~ThreadPool() {
 void ThreadPool::worker_main(int thread_id) {
   std::uint64_t seen = 0;
   for (;;) {
-    // Spin briefly for the next generation, then block.
+    // Spin for the budget, then block.
     bool woke = false;
-    for (int i = 0; i < kWorkerSpinIterations; ++i) {
-      if (generation_.load(std::memory_order_acquire) != seen) {
-        woke = true;
+    const auto deadline = std::chrono::steady_clock::now() + spin_budget_;
+    for (;;) {
+      for (int i = 0; i < kClockCheckInterval; ++i) {
+        if (generation_.load(std::memory_order_acquire) != seen) {
+          woke = true;
+          break;
+        }
+        cpu_relax();
+      }
+      if (woke || std::chrono::steady_clock::now() >= deadline) {
         break;
       }
-      cpu_relax();
     }
     if (!woke) {
+      sleeps_.fetch_add(1, std::memory_order_relaxed);
       std::unique_lock<std::mutex> lock(mutex_);
       wake_cv_.wait(lock, [&] { return generation_.load(std::memory_order_acquire) != seen; });
     }
@@ -132,6 +143,7 @@ void ThreadPool::parallel_for(std::size_t begin, std::size_t end, std::size_t ch
   }
   AXON_DCHECK(!active_, "parallel_for is not reentrant");
   active_ = true;
+  ++launches_;
 
   job_ = Job{.begin = begin, .end = end, .chunk = chunk, .fn = &fn};
   next_chunk_.store(0, std::memory_order_relaxed);
@@ -152,12 +164,18 @@ void ThreadPool::parallel_for(std::size_t begin, std::size_t end, std::size_t ch
 
   if (helpers > 0) {
     bool done = false;
-    for (int i = 0; i < kCallerSpinIterations; ++i) {
-      if (remaining_.load(std::memory_order_acquire) == 0) {
-        done = true;
+    const auto deadline = std::chrono::steady_clock::now() + 10 * spin_budget_;
+    for (;;) {
+      for (int i = 0; i < kClockCheckInterval; ++i) {
+        if (remaining_.load(std::memory_order_acquire) == 0) {
+          done = true;
+          break;
+        }
+        cpu_relax();
+      }
+      if (done || std::chrono::steady_clock::now() >= deadline) {
         break;
       }
-      cpu_relax();
     }
     if (!done) {
       std::unique_lock<std::mutex> lock(mutex_);

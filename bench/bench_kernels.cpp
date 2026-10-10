@@ -6,6 +6,7 @@
 #include <benchmark/benchmark.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <random>
@@ -189,6 +190,30 @@ void bm_matmul_q6_k(benchmark::State& state) {
   report_matmul(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ6_K));
 }
 
+// Launch cost as the model sees it: a single-threaded gap of `gap_us` between launches, like
+// the RMSNorm and RoPE work between matmuls, then one trivial parallel_for. Args are
+// {threads, spin budget us, gap us}. The reported time minus the gap is the launch cost.
+void bm_launch_after_gap(benchmark::State& state) {
+  const auto threads = static_cast<int>(state.range(0));
+  const auto budget = static_cast<int>(state.range(1));
+  const auto gap = std::chrono::microseconds(state.range(2));
+  axon::ThreadPool pool({.n_threads = threads, .spin_budget = std::chrono::microseconds(budget)});
+  std::atomic<std::size_t> sink{0};
+  for (auto _ : state) {
+    const auto until = std::chrono::steady_clock::now() + gap;
+    while (std::chrono::steady_clock::now() < until) {
+    }
+    pool.parallel_for(0, static_cast<std::size_t>(threads), 0,
+                      [&](std::size_t begin, std::size_t end, int) {
+                        sink.fetch_add(end - begin, std::memory_order_relaxed);
+                      });
+  }
+  benchmark::DoNotOptimize(sink.load());
+  state.counters["sleeps"] = static_cast<double>(pool.sleeps());
+  state.counters["launch_us"] = benchmark::Counter((static_cast<double>(state.iterations()) * 0.0),
+                                                   benchmark::Counter::kAvgIterations);
+}
+
 }  // namespace
 
 BENCHMARK(bm_parallel_for_overhead)->Arg(1)->Arg(2)->Arg(4)->Arg(8)->UseRealTime();
@@ -223,3 +248,7 @@ BENCHMARK(bm_matmul_q6_k)
     ->Args({8192, 2048, 0})
     ->Args({2048, 2048, 1})
     ->Args({8192, 2048, 1});
+BENCHMARK(bm_launch_after_gap)
+    ->ArgsProduct({{2, 4, 8}, {0, 50, 200, 1000}, {30}})
+    ->UseRealTime()
+    ->Unit(benchmark::kMicrosecond);

@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -137,7 +138,9 @@ LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer
                        LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
-      exact_activations_(options.exact_activations), kernels_(table), pool_(options.n_threads),
+      exact_activations_(options.exact_activations), kernels_(table),
+      pool_(ThreadPoolOptions{.n_threads = options.n_threads,
+                              .spin_budget = std::chrono::microseconds(options.spin_budget_us)}),
       weight_bytes_(sum_weight_bytes(weights_, cfg_)),
       arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()))) {}
 

@@ -32,6 +32,8 @@ struct LoadOptions {
   int n_threads = 0;
   // Which kernel table runs the forward pass. Auto picks the best the host supports.
   kernels::KernelSet kernels = kernels::KernelSet::Auto;
+  // Microseconds an idle worker thread spins before sleeping, see ThreadPoolOptions.
+  int spin_budget_us = ThreadPoolOptions::kDefaultSpinBudgetUs;
 };
 
 struct ForwardOptions {
@@ -76,6 +78,7 @@ public:
   [[nodiscard]] std::size_t max_ctx() const noexcept { return max_ctx_; }
   [[nodiscard]] bool exact_activations() const noexcept { return exact_activations_; }
   [[nodiscard]] int n_threads() const noexcept { return pool_.size(); }
+  [[nodiscard]] const ThreadPool& pool() const noexcept { return pool_; }
   [[nodiscard]] const kernels::KernelTable& table() const noexcept { return *kernels_; }
   // Bytes of weights one forward pass reads per position, the number to hold against memory
   // bandwidth.
