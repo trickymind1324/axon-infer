@@ -24,7 +24,7 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on small models is bound by per-launch overhead rather than bandwidth, which the fused kernels address next. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
+**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on a 135M model is still paced by the cost of handing work to threads rather than by bandwidth, so small models decode fastest at four threads and lose speed at eight. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
 
 ## Features
 
@@ -107,7 +107,7 @@ Germany also has its own capital city, Berlin. However, it's not the same as Par
 [prompt 92 tokens (76 reused), first token in 3.92 s, decode 40 tokens in 9.78 s (4.09 tok/s), cache 131 positions (5.8 MB of 90.0 MB), peak rss 273 MB, seed 15111573243193277517]
 ```
 
-`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. `--force-scalar` runs the scalar reference kernels for comparison. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
+`/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. `--force-scalar` runs the scalar reference kernels for comparison. `--cache f16` stores keys and values in half precision, which halves the cache memory and the cache bytes read per token at a measured, locked cost in accuracy. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
 
 ### Generate
 
@@ -204,7 +204,7 @@ Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes 
 $ ./build/release/apps/axon/axon bench -m models/SmolLM2-135M-Instruct-Q8_0.gguf --threads 4
 ```
 
-The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, and `06b-neon` runs the NEON kernel table. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
+The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, `06b-neon` runs the NEON kernel table, `06d-fused` merges the launches that share an input and keeps idle workers spinning for a short budget, and `06d-f16cache` is the same build with `--cache f16`. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
 
 | Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |
 |---|---|---|---|---|---|---|
@@ -240,34 +240,54 @@ The steps are the optimizations in the order they landed: `06a-static` split wor
 | 06b-neon | SmolLM2-135M-Instruct-f16 | 2 | 105.3 | 72.09 | 19.40 | 28% |
 | 06b-neon | SmolLM2-135M-Instruct-f16 | 4 | 171.5 | 92.01 | 24.76 | 36% |
 | 06b-neon | SmolLM2-135M-Instruct-f16 | 8 | 231.1 | 69.57 | 18.72 | 27% |
+| 06d-f16cache | Llama-3.2-1B-Instruct-Q4_0 | 8 | 52.9 | 38.12 | 29.17 | 43% |
+| 06d-f16cache | SmolLM2-135M-Instruct-Q8_0 | 8 | 737.0 | 116.27 | 16.63 | 24% |
+| 06d-f16cache | SmolLM2-135M-Instruct-f16 | 8 | 266.2 | 73.19 | 19.70 | 29% |
+| 06d-fused | Llama-3.2-1B-Instruct-Q4_0 | 1 | 13.5 | 12.06 | 9.23 | 14% |
+| 06d-fused | Llama-3.2-1B-Instruct-Q4_0 | 4 | 38.8 | 32.85 | 25.14 | 37% |
+| 06d-fused | Llama-3.2-1B-Instruct-Q4_0 | 8 | 47.9 | 33.38 | 25.55 | 37% |
+| 06d-fused | SmolLM2-135M-Instruct-Q8_0 | 1 | 177.4 | 92.61 | 13.25 | 19% |
+| 06d-fused | SmolLM2-135M-Instruct-Q8_0 | 2 | 328.0 | 129.09 | 18.46 | 27% |
+| 06d-fused | SmolLM2-135M-Instruct-Q8_0 | 4 | 548.2 | 155.94 | 22.30 | 33% |
+| 06d-fused | SmolLM2-135M-Instruct-Q8_0 | 8 | 628.4 | 98.49 | 14.09 | 21% |
+| 06d-fused | SmolLM2-135M-Instruct-f16 | 1 | 53.9 | 43.29 | 11.65 | 17% |
+| 06d-fused | SmolLM2-135M-Instruct-f16 | 2 | 103.9 | 74.39 | 20.02 | 29% |
+| 06d-fused | SmolLM2-135M-Instruct-f16 | 4 | 170.3 | 107.23 | 28.86 | 42% |
+| 06d-fused | SmolLM2-135M-Instruct-f16 | 8 | 220.3 | 68.78 | 18.51 | 27% |
 
-Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06b-neon, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 13.8 | 12.39 | 1.00x | 1.00x |
-| 4 | 41.7 | 33.41 | 3.01x | 2.70x |
-| 8 | 51.0 | 33.20 | 3.69x | 2.68x |
-
-Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06b-neon, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 184.1 | 96.56 | 1.00x | 1.00x |
-| 2 | 328.4 | 114.73 | 1.78x | 1.19x |
-| 4 | 526.2 | 113.36 | 2.86x | 1.17x |
-| 8 | 634.0 | 59.25 | 3.44x | 0.61x |
-
-Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06b-neon, relative to 1 thread(s):
+Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06d-fused, relative to 1 thread(s):
 
 | Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
 |---|---|---|---|---|
-| 1 | 55.2 | 44.32 | 1.00x | 1.00x |
-| 2 | 105.3 | 72.09 | 1.91x | 1.63x |
-| 4 | 171.5 | 92.01 | 3.11x | 2.08x |
-| 8 | 231.1 | 69.57 | 4.19x | 1.57x |
+| 1 | 13.5 | 12.06 | 1.00x | 1.00x |
+| 4 | 38.8 | 32.85 | 2.86x | 2.72x |
+| 8 | 47.9 | 33.38 | 3.53x | 2.77x |
 
-What the tables show. On Llama 3.2 1B the NEON table took decode from 1.9 to 12.4 tokens per second on one thread and to 33 on eight, reaching 37 percent of the machine's bandwidth. Most of that step came from one kernel: the file stores its tied output matrix as Q6_K, which alone cost 392 of the 433 ms per token on the scalar path. On SmolLM2 the picture is different: a 135M model's matmuls are microseconds of work, so decode stops scaling past two threads and the per-launch overhead sets the ceiling. That is the next lever. Prefill, with many rows per launch, scales to eight threads on every model.
+Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06d-fused, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 177.4 | 92.61 | 1.00x | 1.00x |
+| 2 | 328.0 | 129.09 | 1.85x | 1.39x |
+| 4 | 548.2 | 155.94 | 3.09x | 1.68x |
+| 8 | 628.4 | 98.49 | 3.54x | 1.06x |
+
+Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06d-fused, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 53.9 | 43.29 | 1.00x | 1.00x |
+| 2 | 103.9 | 74.39 | 1.93x | 1.72x |
+| 4 | 170.3 | 107.23 | 3.16x | 2.48x |
+| 8 | 220.3 | 68.78 | 4.09x | 1.59x |
+
+What the tables show. On Llama 3.2 1B the NEON table took decode from 1.9 to 12.4 tokens per second on one thread and to 33 on eight, reaching 37 percent of the machine's bandwidth. Most of that step came from one kernel: the file stores its tied output matrix as Q6_K, which alone cost 392 of the 433 ms per token on the scalar path. On SmolLM2 the picture is different: a 135M model's matmuls are microseconds of work, so decode stops scaling past two threads and the per-launch overhead sets the ceiling. Prefill, with many rows per launch, scales to eight threads on every model.
+
+The fused step went after that ceiling from two sides. The q, k and v projections became one launch, gate and up became one launch with the SiLU applied by the thread that produced both halves, and the activation quantization for a single row runs inline, which took a SmolLM2 token from about 271 launches to 151. Idle workers now spin for 200 microseconds before sleeping, set from a kernel benchmark that times a launch after a 30 microsecond single-threaded gap: with the budget a launch costs 0.3 microseconds on two threads and 0.8 on four, against 4 and 7 without it. On SmolLM2 Q8_0 that moved decode from 113 to 156 tokens per second on four threads and from 115 to 129 on two. One thread and Llama 3.2 1B did not move, because neither was launch bound. Eight threads still lose on the small model: the benchmark shows a launch costing 22 microseconds there against 14 asleep, because every core is busy and the efficiency cores answer slowly, so the thread count rather than the budget is the lever and four is the right default on this machine for small models.
+
+The `06d-f16cache` rows are the same build with `--cache f16` at eight threads. Decode moved from 98.5 to 116.3 tokens per second on SmolLM2 Q8_0, from 68.8 to 73.2 on SmolLM2 F16 and from 33.4 to 38.1 on Llama 3.2 1B, with the cache bytes read per token halved. Eight-thread runs on this machine vary more between sittings than the other thread counts, so the direction is the result and the exact gap is not.
+
+A software prefetch of the weight rows ahead of the NEON Q8_0 and Q4_0 kernels was tried at three distances and removed. Every distance slowed the Q8_0 row by 4 to 13 percent, and the one Q4_0 gain was equal to that run's own spread. The hardware prefetcher already follows the four sequential row streams.
 
 Kernel rows, one thread, scalar against NEON on the same shapes:
 
@@ -292,6 +312,8 @@ Measured on SmolLM2-135M-Instruct against its F16 file, over the ten prompt fixt
 | Q4_0 | 77.9% | 20.185 | 20.194 | +2.53 |
 
 A 135M model loses a lot to Q4_0. That is a property of the model and the format, reproduced by Hugging Face on the same weights, not of the engine. Larger models lose far less, and the perplexity tool makes the trade-off measurable for any file.
+
+The fp16 cache is a different kind of trade. On the F16 file it leaves every argmax over the 145 fixture positions unchanged and moves the perplexity from 17.6516 to 17.6515, for half the cache memory.
 
 ### Provenance
 
@@ -329,6 +351,20 @@ A 135M model loses a lot to Q4_0. That is a property of the model and the format
 | m1-06b-neon-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
 | m1-06b-neon-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
 | m1-06b-neon-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4c3562c65cc1 | 2026-10-06 | f535f83ec568 |
+| m1-06d-f16cache-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 93012f7c8ab4 (dirty) | 2026-10-11 | fa0390e7c043 |
+| m1-06d-f16cache-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 93012f7c8ab4 (dirty) | 2026-10-11 | 5a1395716f79 |
+| m1-06d-f16cache-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 93012f7c8ab4 (dirty) | 2026-10-11 | f535f83ec568 |
+| m1-06d-fused-Llama-3.2-1B-Instruct-Q4_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | fa0390e7c043 |
+| m1-06d-fused-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | fa0390e7c043 |
+| m1-06d-fused-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | fa0390e7c043 |
+| m1-06d-fused-SmolLM2-135M-Instruct-Q8_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | 5a1395716f79 |
+| m1-06d-fused-SmolLM2-135M-Instruct-Q8_0-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | 5a1395716f79 |
+| m1-06d-fused-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | 5a1395716f79 |
+| m1-06d-fused-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | 5a1395716f79 |
+| m1-06d-fused-SmolLM2-135M-Instruct-f16-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
+| m1-06d-fused-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
+| m1-06d-fused-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
+| m1-06d-fused-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
 
 ## Design notes
 
@@ -340,7 +376,7 @@ Every operation the forward pass needs lives behind one table of function pointe
 
 ### Forward pass
 
-Threads split the output columns of every matmul, the heads of the attention and the rows of activation quantization, claiming chunks dynamically so the M1's slower efficiency cores do not pace each launch. No partial sum ever crosses a thread, so the logits are bit-identical at any thread count, and that equality is a test on every weight format rather than a tolerance. There is no deterministic mode because nothing needs one yet.
+Threads split the output columns of every matmul, the heads of the attention and the rows of activation quantization, claiming chunks dynamically so the M1's slower efficiency cores do not pace each launch. Launches that share an input row are one launch: q, k and v over the union of their columns, gate and up over column pairs with the SiLU product applied in the epilogue, each output element still produced by the same kernel call on the same data. A worker that runs out of work spins for a wall-clock budget before it sleeps, because the gaps between launches are tens of microseconds and a sleeping worker costs a wake-up on every one. No partial sum ever crosses a thread, so the logits are bit-identical at any thread count and whichever launches are fused, and that equality is a test on every weight format rather than a tolerance. There is no deterministic mode because nothing needs one yet.
 
 `LlamaModel` reads its configuration from the GGUF metadata, binds every weight with an exact shape and dtype check, and runs the block in the order the paper gives it: RMSNorm, Q/K/V projections, RoPE, causal grouped-query attention, output projection, RMSNorm, SwiGLU feed-forward, each with a residual add. Weights stay memory-mapped. Activations come from one arena sized at load, and a test asserts that the computed size equals the measured high-water mark and that a forward pass performs no heap allocation.
 
@@ -350,7 +386,9 @@ Threads split the output columns of every matmul, the heads of the attention and
 
 `KVCache` holds keys and values for every layer, preallocated for the cache length and filled in position order. The storage is an anonymous mapping, so context that is never reached costs no memory. `forward_prefill` appends a chunk of tokens and `forward_one` appends a single token. Both run the same layer code as the cache-free pass, writing new keys and values straight into the cache rows and attending over everything cached so far. Context overflow is an error, never a silent grow.
 
-The defining property is bit-identity: cached decoding produces exactly the floats the cache-free forward produces, at every position, because no reduction is ever reordered on the scalar path.
+The defining property is bit-identity: with the default F32 cache, cached decoding produces exactly the floats the cache-free forward produces, at every position, because no reduction is ever reordered on the scalar path.
+
+The cache can also hold keys and values as fp16. New rows are computed in float, rounded once on the way in, and the attention kernel widens them as it reads, in the same loop order as the F32 kernel. The arena is sized for the cache type the model was loaded with, and a cache of the other type is refused. The cost of the rounding is measured and locked: on the synthetic models the logits move by at most 1.7e-3 of their range, on SmolLM2 by 5.8e-4 with every argmax unchanged over the prompt fixtures, and the perplexity over the WikiText-2 chunks goes from 17.6516 to 17.6515. The NEON fp16 attention agrees with the scalar one within 8e-7 of the logit range, measured first and locked at four times the measurement like the other NEON kernels.
 
 ### Sampling and chat
 
