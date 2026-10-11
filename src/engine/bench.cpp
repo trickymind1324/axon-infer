@@ -112,8 +112,9 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
   const auto& cfg = model.config();
   const double mean_position = static_cast<double>(result.prompt_tokens) +
                                static_cast<double>(result.generated_tokens - 1) / 2.0;
+  const double element_bytes = model.cache_type() == model::CacheType::F16 ? 2.0 : 4.0;
   result.cache_bytes_per_token =
-      2.0 * cfg.n_layer * static_cast<double>(cfg.n_embd_kv()) * sizeof(float) * mean_position;
+      2.0 * cfg.n_layer * static_cast<double>(cfg.n_embd_kv()) * element_bytes * mean_position;
   result.weight_gb_s_median =
       static_cast<double>(result.weight_bytes_per_token) * result.decode_tok_s_median / 1e9;
   return result;
