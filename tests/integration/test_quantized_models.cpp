@@ -181,6 +181,72 @@ TEST_CASE("perplexity matches Hugging Face on every SmolLM2 file",
   }
 }
 
+TEST_CASE("the fp16 cache on SmolLM2 stays within the locked tolerance of the F32 cache",
+          "[integration][model][cache_f16]") {
+  // The same F16 weights with the two cache types, decoded through the cache so every key and
+  // value goes through the rounding. The logit difference over the logit range is measured on
+  // the synthetic models in the unit suite and here on a real model, then locked at four times
+  // the measurement. The perplexity with the fp16 cache is recorded next to the F32 number.
+  auto full = load(kF16, {.max_seq = 64, .max_ctx = 64, .cache = axon::model::CacheType::F32});
+  auto half = load(kF16, {.max_seq = 64, .max_ctx = 64, .cache = axon::model::CacheType::F16});
+  const std::size_t n_vocab = full->config().n_vocab;
+  float worst_ratio = 0.0F;
+  std::size_t positions = 0;
+  std::size_t agree = 0;
+  for (int i = 0; i < 10; ++i) {
+    const auto tokens = prompt_tokens(i);
+    auto cache_full = full->new_cache();
+    auto cache_half = half->new_cache();
+    const auto reference = full->forward_prefill(cache_full, tokens);
+    const auto got = half->forward_prefill(cache_half, tokens);
+    REQUIRE(reference);
+    REQUIRE(got);
+    float range = 0.0F;
+    float diff = 0.0F;
+    for (std::size_t j = 0; j < reference->size(); ++j) {
+      range = std::max(range, std::abs((*reference)[j]));
+      diff = std::max(diff, std::abs((*reference)[j] - (*got)[j]));
+    }
+    worst_ratio = std::max(worst_ratio, diff / range);
+    for (std::size_t p = 0; p < tokens.size(); ++p) {
+      const float* a = reference->data() + p * n_vocab;
+      const float* b = got->data() + p * n_vocab;
+      agree +=
+          (std::max_element(a, a + n_vocab) - a) == (std::max_element(b, b + n_vocab) - b) ? 1 : 0;
+      ++positions;
+    }
+  }
+  const float agreement = static_cast<float>(agree) / static_cast<float>(positions);
+  WARN("SmolLM2 F16 with the fp16 cache against the F32 cache: max abs logit difference over "
+       "the logit range "
+       << worst_ratio << ", argmax agreement " << agreement * 100.0F << "% over " << positions
+       << " positions");
+  // Measured 2026-10-11: 5.8e-4 of the logit range with every argmax unchanged. Locked at four
+  // times the measurement.
+  CHECK(worst_ratio < 2.4e-3F);
+
+  const auto text =
+      read_text(std::filesystem::path(AXON_FIXTURE_DIR) / "perplexity/wikitext2-test-head.txt");
+  const axon::engine::PerplexityOptions opts{.chunk_size = 512, .max_chunks = 4};
+  auto full_ctx =
+      load(kF16, {.max_seq = 128, .max_ctx = 512, .cache = axon::model::CacheType::F32});
+  auto half_ctx =
+      load(kF16, {.max_seq = 128, .max_ctx = 512, .cache = axon::model::CacheType::F16});
+  const auto tokens =
+      full_ctx->tokenizer().encode(text, {.add_bos = std::nullopt, .parse_special = false});
+  const auto ppl_full = axon::engine::perplexity(*full_ctx, tokens, opts);
+  const auto ppl_half = axon::engine::perplexity(*half_ctx, tokens, opts);
+  REQUIRE(ppl_full);
+  REQUIRE(ppl_half);
+  WARN("SmolLM2 F16 perplexity with the fp16 cache "
+       << ppl_half->perplexity() << " (F32 cache " << ppl_full->perplexity() << ", delta "
+       << ppl_half->perplexity() - ppl_full->perplexity() << ")");
+  CHECK(ppl_half->scored_tokens == ppl_full->scored_tokens);
+  // Measured 2026-10-11: 17.6515 against 17.6516, a delta of -4.3e-5. Locked at four times
+  // the measurement.
+  CHECK(std::abs(ppl_half->perplexity() - ppl_full->perplexity()) < 1.8e-4);
+}
+
 TEST_CASE("the other models answer a chat question through their own templates",
           "[integration][model][quant][chat]") {
   struct Case {
