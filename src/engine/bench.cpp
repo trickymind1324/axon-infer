@@ -120,6 +120,87 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
   return result;
 }
 
+namespace {
+
+model::ForwardOptions profiled(model::ForwardProfile* profile) {
+  model::ForwardOptions opts;
+  opts.profile = profile;
+  return opts;
+}
+
+Expected<bool> prefill_chunks(model::LlamaModel& model, model::KVCache& cache,
+                              std::span<const std::int32_t> prompt,
+                              model::ForwardProfile* profile) {
+  for (std::size_t offset = 0; offset < prompt.size(); offset += model.max_seq()) {
+    const std::size_t n = std::min(model.max_seq(), prompt.size() - offset);
+    const auto out = model.forward_prefill(cache, prompt.subspan(offset, n), profiled(profile));
+    if (!out) {
+      return out.error();
+    }
+  }
+  return true;
+}
+
+}  // namespace
+
+Expected<ProfileReport> profile_forward(model::LlamaModel& model,
+                                        std::span<const std::int32_t> prompt) {
+  if (prompt.empty()) {
+    return make_error(ErrorCode::InvalidArgument, "profile: the prompt is empty");
+  }
+  if (prompt.size() + 1 > model.max_ctx()) {
+    return make_error(ErrorCode::InvalidArgument,
+                      fmt::format("profile: the prompt and one token need {} positions, "
+                                  "the context has {}",
+                                  prompt.size() + 1, model.max_ctx()));
+  }
+  ProfileReport report;
+  report.prompt_tokens = prompt.size();
+  const std::int32_t next = prompt.back();
+  {
+    auto warm = model.new_cache();
+    const auto filled = prefill_chunks(model, warm, prompt, nullptr);
+    if (!filled) {
+      return filled.error();
+    }
+    const auto one = model.forward_one(warm, next);
+    if (!one) {
+      return one.error();
+    }
+  }
+  auto cache = model.new_cache();
+  const auto filled = prefill_chunks(model, cache, prompt, &report.prefill);
+  if (!filled) {
+    return filled.error();
+  }
+  const auto one = model.forward_prefill(cache, std::span(&next, 1), profiled(&report.decode));
+  if (!one) {
+    return one.error();
+  }
+  return report;
+}
+
+std::string profile_text(const ProfileReport& report) {
+  using model::ForwardProfile;
+  const double prefill_total = report.prefill.total();
+  const double decode_total = report.decode.total();
+  const auto per_prompt_token = static_cast<double>(report.prompt_tokens);
+  std::string out = fmt::format("{:<10} {:>14} {:>7} {:>14} {:>7}\n", "launch", "prefill ms/tok",
+                                "share", "decode ms/tok", "share");
+  for (std::size_t i = 0; i < ForwardProfile::kSlots; ++i) {
+    const auto slot = static_cast<ForwardProfile::Slot>(i);
+    const double p = report.prefill.seconds[i];
+    const double d = report.decode.seconds[i];
+    out += fmt::format("{:<10} {:>14.3f} {:>6.1f}% {:>14.3f} {:>6.1f}%\n",
+                       ForwardProfile::name(slot), 1e3 * p / per_prompt_token,
+                       prefill_total > 0.0 ? 100.0 * p / prefill_total : 0.0, 1e3 * d,
+                       decode_total > 0.0 ? 100.0 * d / decode_total : 0.0);
+  }
+  out += fmt::format("{:<10} {:>14.3f} {:>7} {:>14.3f} {:>7}\n", "total",
+                     1e3 * prefill_total / per_prompt_token, "", 1e3 * decode_total, "");
+  return out;
+}
+
 std::string bench_json(const BenchResult& r, std::string_view model_file,
                        std::string_view description) {
   std::string runs;

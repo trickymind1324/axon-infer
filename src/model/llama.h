@@ -11,6 +11,7 @@
 #include "model/kv_cache.h"
 #include "model/weights.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -39,11 +40,39 @@ struct LoadOptions {
   CacheType cache = CacheType::F32;
 };
 
+// Where a forward call spent its wall-clock time, by launch kind. Filled only when a
+// ForwardOptions names a profile, which costs one clock read per launch and nothing otherwise.
+// Seconds accumulate across calls, so a caller can profile a whole prompt in chunks.
+struct ForwardProfile {
+  enum Slot : std::uint8_t {
+    kQuantize,    // activation rows quantized to Q8_0 blocks
+    kQkv,         // the fused q, k and v projections
+    kAttention,   // attention over the cache or the staged keys and values
+    kOutputProj,  // the attention output projection
+    kGateUp,      // the fused gate and up projections with the SiLU product
+    kDown,        // the down projection
+    kLogits,      // the output matrix
+    kOther,       // embedding, norms, RoPE, biases, residual adds, fp16 cache rounding
+    kSlots
+  };
+  std::array<double, kSlots> seconds{};
+  [[nodiscard]] double total() const noexcept {
+    double sum = 0.0;
+    for (const double s : seconds) {
+      sum += s;
+    }
+    return sum;
+  }
+  static const char* name(Slot slot) noexcept;
+};
+
 struct ForwardOptions {
   static constexpr std::size_t kNoDump = std::numeric_limits<std::size_t>::max();
   // Write this layer's activations (plus the embeddings and logits) as .axt files.
   std::size_t dump_layer = kNoDump;
   std::filesystem::path dump_dir;
+  // Accumulate the time per launch kind here. Null leaves the hot path untouched.
+  ForwardProfile* profile = nullptr;
 };
 
 // A LLaMA-family model: memory-mapped weights, one arena for activations, and two forward
@@ -66,7 +95,8 @@ public:
   // [tokens.size()][n_vocab]. Fails like forward, and also when the cache belongs to another
   // model or the new tokens would not fit.
   Expected<std::span<const float>> forward_prefill(KVCache& cache,
-                                                   std::span<const std::int32_t> tokens);
+                                                   std::span<const std::int32_t> tokens,
+                                                   const ForwardOptions& opts = {});
   // One token at position cache.pos(). Logits are [1][n_vocab].
   Expected<std::span<const float>> forward_one(KVCache& cache, std::int32_t token);
 

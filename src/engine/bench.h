@@ -51,6 +51,19 @@ struct BenchResult {
   double load_average_after = 0.0;
 };
 
+// Where the forward pass spends its time, by launch kind: the whole prompt prefilled in
+// max_seq chunks on a fresh cache, then one decoded token. One unprofiled pass runs first so
+// page faults on the weights are not charged to a slot.
+struct ProfileReport {
+  model::ForwardProfile prefill;
+  model::ForwardProfile decode;
+  std::size_t prompt_tokens = 0;
+};
+Expected<ProfileReport> profile_forward(model::LlamaModel& model,
+                                        std::span<const std::int32_t> prompt);
+// One line per slot: milliseconds per prompt token and per decoded token with their shares.
+std::string profile_text(const ProfileReport& report);
+
 // One warm-up plus `runs` measured runs of prefill-then-decode on a fresh cache each time,
 // greedy, never stopping on end-of-generation tokens. The prompt must fit the context with
 // room for the generated tokens. Progress is called after each measured run.

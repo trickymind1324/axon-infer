@@ -434,6 +434,7 @@ struct BenchCli {
   bool force_scalar = false;
   std::string cache = "f32";
   bool json = false;
+  bool profile = false;
 };
 
 // The methodology every published number follows: a fixed prompt cut from the committed text,
@@ -489,18 +490,28 @@ int run_bench(const BenchCli& opt) {
   }
   if (opt.json) {
     fmt::print("{}\n", axon::engine::bench_json(*result, opt.model, model.config().describe()));
-    return 0;
   }
-  fmt::print(
-      "prefill {:.2f} tok/s median ({:.2f} best), decode {:.2f} tok/s median ({:.2f} best)\n",
-      result->prefill_tok_s_median, result->prefill_tok_s_best, result->decode_tok_s_median,
-      result->decode_tok_s_best);
-  fmt::print(
-      "weights {:.1f} MB per token, cache {:.1f} MB per token on average, {:.2f} GB/s of "
-      "weights at the median, peak rss {:.0f} MB, load average {:.2f} before and {:.2f} after\n",
-      static_cast<double>(result->weight_bytes_per_token) / 1e6,
-      result->cache_bytes_per_token / 1e6, result->weight_gb_s_median, result->peak_rss_mb,
-      result->load_average_before, result->load_average_after);
+  if (!opt.json) {
+    fmt::print(
+        "prefill {:.2f} tok/s median ({:.2f} best), decode {:.2f} tok/s median ({:.2f} best)\n",
+        result->prefill_tok_s_median, result->prefill_tok_s_best, result->decode_tok_s_median,
+        result->decode_tok_s_best);
+    fmt::print(
+        "weights {:.1f} MB per token, cache {:.1f} MB per token on average, {:.2f} GB/s of "
+        "weights at the median, peak rss {:.0f} MB, load average {:.2f} before and {:.2f} after\n",
+        static_cast<double>(result->weight_bytes_per_token) / 1e6,
+        result->cache_bytes_per_token / 1e6, result->weight_gb_s_median, result->peak_rss_mb,
+        result->load_average_before, result->load_average_after);
+  }
+  if (opt.profile) {
+    const auto report = axon::engine::profile_forward(model, ids);
+    if (!report) {
+      fmt::print(stderr, "error: {}\n", report.error().message);
+      return 2;
+    }
+    // The JSON stays one object on stdout, so the profile goes to stderr in that mode.
+    fmt::print(opt.json ? stderr : stdout, "{}", axon::engine::profile_text(*report));
+  }
   return 0;
 }
 
@@ -587,6 +598,8 @@ int run(int argc, char** argv) {
                  "microseconds an idle worker spins before sleeping")
       ->default_val(axon::ThreadPoolOptions::kDefaultSpinBudgetUs);
   be->add_flag("--json", bench.json, "print one JSON object");
+  be->add_flag("--profile", bench.profile,
+               "also print where prefill and one decode step spend their time, by launch kind");
   app.require_subcommand(0, 1);
   CLI11_PARSE(app, argc, argv);
   axon::log::Level level{};
