@@ -230,6 +230,44 @@ std::vector<axon::BlockQ6_K> random_q6_k(std::size_t n_blocks) {
   return wq;
 }
 
+// Q8_0 and Q4_0 weights with Q8_0 activations over kBenchRows rows. Args are {n_out, n_in,
+// four_bit, table}.
+void bm_matmul_int_rows(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const bool four_bit = state.range(2) != 0;
+  const auto& k = state.range(3) == 0 ? axon::kernels::scalar_kernels()
+                                      : **axon::kernels::select(axon::kernels::KernelSet::Auto);
+  const auto w = random_floats(n_out * n_in, 1);
+  std::vector<axon::BlockQ8_0> w8(n_out * n_in / 32);
+  axon::quantize_row_q8_0(w.data(), w8.data(), w.size());
+  std::vector<axon::BlockQ4_0> w4(w8.size());
+  for (std::size_t b = 0; b < w4.size(); ++b) {
+    w4[b].d = w8[b].d;
+    for (std::size_t i = 0; i < 16; ++i) {
+      w4[b].qs[i] = static_cast<std::uint8_t>((w8[b].qs[i] & 0x0F) | (w8[b].qs[i + 16] << 4));
+    }
+  }
+  const auto x = random_floats(kBenchRows * n_in, 2);
+  std::vector<axon::BlockQ8_0> xq(kBenchRows * n_in / 32);
+  for (std::size_t r = 0; r < kBenchRows; ++r) {
+    axon::quantize_row_q8_0(x.data() + r * n_in, xq.data() + r * (n_in / 32), n_in);
+  }
+  std::vector<float> y(kBenchRows * n_out);
+  for (auto _ : state) {
+    if (four_bit) {
+      k.matmul_q4_0_q8_rows(w4.data(), xq.data(), y.data(), kBenchRows, n_out, n_in, n_out);
+    } else {
+      k.matmul_q8_0_q8_rows(w8.data(), xq.data(), y.data(), kBenchRows, n_out, n_in, n_out);
+    }
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul_rows(state, n_out, n_in,
+                     four_bit ? w4.size() * sizeof(axon::BlockQ4_0)
+                              : w8.size() * sizeof(axon::BlockQ8_0));
+}
+
 void bm_matmul_q6_k_rows(benchmark::State& state) {
   const auto n_out = static_cast<std::size_t>(state.range(0));
   const auto n_in = static_cast<std::size_t>(state.range(1));
@@ -301,6 +339,11 @@ BENCHMARK(bm_matmul_q6_k)
     ->Args({2048, 2048, 1})
     ->Args({8192, 2048, 1});
 BENCHMARK(bm_matmul_q6_k_rows)->Args({2048, 2048, 0})->Args({2048, 2048, 1});
+BENCHMARK(bm_matmul_int_rows)
+    ->Args({2048, 2048, 0, 0})
+    ->Args({2048, 2048, 0, 1})
+    ->Args({2048, 2048, 1, 0})
+    ->Args({2048, 2048, 1, 1});
 BENCHMARK(bm_launch_after_gap)
     ->ArgsProduct({{2, 4, 8}, {0, 50, 200, 1000}, {30}})
     ->UseRealTime()

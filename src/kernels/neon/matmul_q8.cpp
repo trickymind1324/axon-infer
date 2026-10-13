@@ -153,20 +153,106 @@ void matmul_q4_1_q8(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size
   }
 }
 
+// --- multi-row tiles -----------------------------------------------------------------------
+//
+// Four weight rows against R activation rows. Per block the four weight blocks are loaded (and
+// for Q4_0 unpacked) once and dotted with every activation row, the four exact integer sums of
+// one activation row land in the lanes of one vector through pairwise adds, and the float
+// chain runs on that vector: convert, multiply by the four weight scales, then one fused
+// multiply-add with the activation scale. That is the instruction sequence the scalar kernel
+// compiles to per element (a multiply, then a fused multiply-add into the accumulator), so the
+// tile is bit-identical to the single-row kernels, which the tests check row by row.
+
+// The block scales of four consecutive weight rows as one float vector.
+inline float32x4_t scales4(std::uint16_t d0, std::uint16_t d1, std::uint16_t d2, std::uint16_t d3) {
+  uint16x4_t h = vdup_n_u16(d0);
+  h = vset_lane_u16(d1, h, 1);
+  h = vset_lane_u16(d2, h, 2);
+  h = vset_lane_u16(d3, h, 3);
+  return vcvt_f32_f16(vreinterpret_f16_u16(h));
+}
+
+struct Unpacked {
+  int8x16_t lo;
+  int8x16_t hi;
+};
+
+inline Unpacked unpack(const BlockQ8_0& block) {
+  return {.lo = vld1q_s8(block.qs), .hi = vld1q_s8(block.qs + 16)};
+}
+
+inline Unpacked unpack(const BlockQ4_0& block) {
+  const uint8x16_t packed = vld1q_u8(block.qs);
+  return {.lo = vsubq_s8(vreinterpretq_s8_u8(vandq_u8(packed, vdupq_n_u8(0x0F))), vdupq_n_s8(8)),
+          .hi = vsubq_s8(vreinterpretq_s8_u8(vshrq_n_u8(packed, 4)), vdupq_n_s8(8))};
+}
+
+template <std::size_t R, class Block>
+void tile4(const Block* r0, std::size_t nb, const BlockQ8_0* xq, float* y, std::size_t y_stride) {
+  const Block* r1 = r0 + nb;
+  const Block* r2 = r1 + nb;
+  const Block* r3 = r2 + nb;
+  float32x4_t acc[R];
+  for (auto& a : acc) {
+    a = vdupq_n_f32(0.0F);
+  }
+  for (std::size_t b = 0; b < nb; ++b) {
+    const Unpacked w0 = unpack(r0[b]);
+    const Unpacked w1 = unpack(r1[b]);
+    const Unpacked w2 = unpack(r2[b]);
+    const Unpacked w3 = unpack(r3[b]);
+    const float32x4_t dw = scales4(r0[b].d, r1[b].d, r2[b].d, r3[b].d);
+    for (std::size_t r = 0; r < R; ++r) {
+      const BlockQ8_0& xb = xq[r * nb + b];
+      const int8x16_t xa = vld1q_s8(xb.qs);
+      const int8x16_t xc = vld1q_s8(xb.qs + 16);
+      const int32x4_t p0 = vdotq_s32(vdotq_s32(vdupq_n_s32(0), w0.lo, xa), w0.hi, xc);
+      const int32x4_t p1 = vdotq_s32(vdotq_s32(vdupq_n_s32(0), w1.lo, xa), w1.hi, xc);
+      const int32x4_t p2 = vdotq_s32(vdotq_s32(vdupq_n_s32(0), w2.lo, xa), w2.hi, xc);
+      const int32x4_t p3 = vdotq_s32(vdotq_s32(vdupq_n_s32(0), w3.lo, xa), w3.hi, xc);
+      const int32x4_t sums = vpaddq_s32(vpaddq_s32(p0, p1), vpaddq_s32(p2, p3));
+      const float32x4_t scaled = vmulq_f32(vcvtq_f32_s32(sums), dw);
+      acc[r] = vfmaq_n_f32(acc[r], scaled, half(xb.d));
+    }
+  }
+  for (std::size_t r = 0; r < R; ++r) {
+    vst1q_f32(y + r * y_stride, acc[r]);
+  }
+}
+
+constexpr std::size_t kRowTile = 8;
+
+template <class Block>
+void matmul_rows_tiled(const Block* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
+                       std::size_t n_out, std::size_t n_in, std::size_t y_stride,
+                       void (*single)(const Block*, const BlockQ8_0*, float*, std::size_t,
+                                      std::size_t)) {
+  const std::size_t nb = blocks_of(n_in);
+  std::size_t o = 0;
+  for (; o + 4 <= n_out; o += 4) {
+    std::size_t r = 0;
+    for (; r + kRowTile <= n_rows; r += kRowTile) {
+      tile4<kRowTile>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
+    }
+    for (; r < n_rows; ++r) {
+      tile4<1>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
+    }
+  }
+  if (o < n_out) {
+    for (std::size_t r = 0; r < n_rows; ++r) {
+      single(w + o * nb, xq + r * nb, y + r * y_stride + o, n_out - o, n_in);
+    }
+  }
+}
+
 void matmul_q8_0_q8_rows(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
                          std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
-  const std::size_t nb = blocks_of(n_in);
-  for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_q8_0_q8(w, xq + r * nb, y + r * y_stride, n_out, n_in);
-  }
+  matmul_rows_tiled(w, xq, y, n_rows, n_out, n_in, y_stride, matmul_q8_0_q8);
 }
 
 void matmul_q4_0_q8_rows(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
                          std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
-  const std::size_t nb = blocks_of(n_in);
-  for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_q4_0_q8(w, xq + r * nb, y + r * y_stride, n_out, n_in);
-  }
+  matmul_rows_tiled(w, xq, y, n_rows, n_out, n_in, y_stride, matmul_q4_0_q8);
 }
 
 void matmul_q4_1_q8_rows(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
