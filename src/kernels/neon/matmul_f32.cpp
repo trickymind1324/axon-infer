@@ -66,16 +66,16 @@ void matmul_f16(const std::uint16_t* w, const float* x, float* y, std::size_t n_
 }
 
 void matmul_f32_rows(const float* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in) {
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
   for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_f32(w, x + r * n_in, y + r * n_out, n_out, n_in);
+    matmul_f32(w, x + r * n_in, y + r * y_stride, n_out, n_in);
   }
 }
 
 void matmul_f16_rows(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in) {
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
   for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_f16(w, x + r * n_in, y + r * n_out, n_out, n_in);
+    matmul_f16(w, x + r * n_in, y + r * y_stride, n_out, n_in);
   }
 }
 

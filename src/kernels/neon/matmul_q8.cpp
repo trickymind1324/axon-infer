@@ -154,26 +154,26 @@ void matmul_q4_1_q8(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size
 }
 
 void matmul_q8_0_q8_rows(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in) {
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
   const std::size_t nb = blocks_of(n_in);
   for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_q8_0_q8(w, xq + r * nb, y + r * n_out, n_out, n_in);
+    matmul_q8_0_q8(w, xq + r * nb, y + r * y_stride, n_out, n_in);
   }
 }
 
 void matmul_q4_0_q8_rows(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in) {
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
   const std::size_t nb = blocks_of(n_in);
   for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_q4_0_q8(w, xq + r * nb, y + r * n_out, n_out, n_in);
+    matmul_q4_0_q8(w, xq + r * nb, y + r * y_stride, n_out, n_in);
   }
 }
 
 void matmul_q4_1_q8_rows(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in) {
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
   const std::size_t nb = blocks_of(n_in);
   for (std::size_t r = 0; r < n_rows; ++r) {
-    matmul_q4_1_q8(w, xq + r * nb, y + r * n_out, n_out, n_in);
+    matmul_q4_1_q8(w, xq + r * nb, y + r * y_stride, n_out, n_in);
   }
 }
 

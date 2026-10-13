@@ -21,51 +21,80 @@ namespace axon::model {
 
 namespace {
 
-// y[n_out] = W[n_out][n_in] x[n_in] for one activation row, over output rows [begin, end) of
-// the weight. Quantized weights take the row's Q8_0 blocks in `xq` unless `exact` asks for the
-// float path. Each output element is computed by exactly one call with the same instruction
-// sequence whatever the split, which is what keeps threaded results bit-identical.
+// Y[n_rows][n_out] = X[n_rows][n_in] W^T over output columns [begin, end) of the weight, the
+// activation rows n_in apart and the output rows w.ne1 apart. Quantized weights take the rows'
+// Q8_0 blocks in `xq` unless `exact` asks for the float path. One row goes to the single-row
+// kernel, more rows to the multi-row entry with the output stride. Each output element is
+// computed by exactly one call with the same instruction sequence whatever the split, which is
+// what keeps threaded results bit-identical.
 void matmul_columns(const kernels::KernelTable& k, const Tensor& w, const float* x,
-                    const BlockQ8_0* xq, float* y, std::size_t begin, std::size_t end, bool exact) {
+                    const BlockQ8_0* xq, float* y, std::size_t n_rows, std::size_t begin,
+                    std::size_t end, bool exact) {
   const auto n_in = static_cast<std::size_t>(w.ne0);
+  const auto stride = static_cast<std::size_t>(w.ne1);
   const std::size_t n_out = end - begin;
   const auto* base = static_cast<const std::byte*>(w.data) + begin * w.row_bytes;
   float* out = y + begin;
+  const bool one = n_rows == 1;
   switch (w.type) {
-  case DType::F32:
-    k.matmul_f32(reinterpret_cast<const float*>(base), x, out, n_out, n_in);
+  case DType::F32: {
+    const auto* wp = reinterpret_cast<const float*>(base);
+    one ? k.matmul_f32(wp, x, out, n_out, n_in)
+        : k.matmul_f32_rows(wp, x, out, n_rows, n_out, n_in, stride);
     return;
-  case DType::F16:
-    k.matmul_f16(reinterpret_cast<const std::uint16_t*>(base), x, out, n_out, n_in);
+  }
+  case DType::F16: {
+    const auto* wp = reinterpret_cast<const std::uint16_t*>(base);
+    one ? k.matmul_f16(wp, x, out, n_out, n_in)
+        : k.matmul_f16_rows(wp, x, out, n_rows, n_out, n_in, stride);
     return;
-  case DType::BF16:
-    k.matmul_bf16(reinterpret_cast<const std::uint16_t*>(base), x, out, n_out, n_in);
+  }
+  case DType::BF16: {
+    const auto* wp = reinterpret_cast<const std::uint16_t*>(base);
+    one ? k.matmul_bf16(wp, x, out, n_out, n_in)
+        : k.matmul_bf16_rows(wp, x, out, n_rows, n_out, n_in, stride);
     return;
-  case DType::Q8_0:
+  }
+  case DType::Q8_0: {
+    const auto* wp = reinterpret_cast<const BlockQ8_0*>(base);
     if (exact) {
-      k.matmul_q8_0(reinterpret_cast<const BlockQ8_0*>(base), x, out, n_out, n_in);
+      one ? k.matmul_q8_0(wp, x, out, n_out, n_in)
+          : k.matmul_q8_0_rows(wp, x, out, n_rows, n_out, n_in, stride);
     } else {
-      k.matmul_q8_0_q8(reinterpret_cast<const BlockQ8_0*>(base), xq, out, n_out, n_in);
+      one ? k.matmul_q8_0_q8(wp, xq, out, n_out, n_in)
+          : k.matmul_q8_0_q8_rows(wp, xq, out, n_rows, n_out, n_in, stride);
     }
     return;
-  case DType::Q4_0:
+  }
+  case DType::Q4_0: {
+    const auto* wp = reinterpret_cast<const BlockQ4_0*>(base);
     if (exact) {
-      k.matmul_q4_0(reinterpret_cast<const BlockQ4_0*>(base), x, out, n_out, n_in);
+      one ? k.matmul_q4_0(wp, x, out, n_out, n_in)
+          : k.matmul_q4_0_rows(wp, x, out, n_rows, n_out, n_in, stride);
     } else {
-      k.matmul_q4_0_q8(reinterpret_cast<const BlockQ4_0*>(base), xq, out, n_out, n_in);
+      one ? k.matmul_q4_0_q8(wp, xq, out, n_out, n_in)
+          : k.matmul_q4_0_q8_rows(wp, xq, out, n_rows, n_out, n_in, stride);
     }
     return;
-  case DType::Q4_1:
+  }
+  case DType::Q4_1: {
+    const auto* wp = reinterpret_cast<const BlockQ4_1*>(base);
     if (exact) {
-      k.matmul_q4_1(reinterpret_cast<const BlockQ4_1*>(base), x, out, n_out, n_in);
+      one ? k.matmul_q4_1(wp, x, out, n_out, n_in)
+          : k.matmul_q4_1_rows(wp, x, out, n_rows, n_out, n_in, stride);
     } else {
-      k.matmul_q4_1_q8(reinterpret_cast<const BlockQ4_1*>(base), xq, out, n_out, n_in);
+      one ? k.matmul_q4_1_q8(wp, xq, out, n_out, n_in)
+          : k.matmul_q4_1_q8_rows(wp, xq, out, n_rows, n_out, n_in, stride);
     }
     return;
-  case DType::Q6_K:
+  }
+  case DType::Q6_K: {
     // Float activations only: the super-block format has no integer path yet.
-    k.matmul_q6_k(reinterpret_cast<const BlockQ6_K*>(base), x, out, n_out, n_in);
+    const auto* wp = reinterpret_cast<const BlockQ6_K*>(base);
+    one ? k.matmul_q6_k(wp, x, out, n_out, n_in)
+        : k.matmul_q6_k_rows(wp, x, out, n_rows, n_out, n_in, stride);
     return;
+  }
   default:
     AXON_CHECK(false, "matmul: unbound dtype {}", dtype_name(w.type));
   }
@@ -346,7 +375,6 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   const auto mm_fused = [&](std::span<const Segment> segments, const float* x,
                             ForwardProfile::Slot slot) {
     const auto n_in = static_cast<std::size_t>(segments[0].w->ne0);
-    const std::size_t nb = n_in / kQK8_0;
     tick(ForwardProfile::kOther);
     bool quantized = false;
     for (const auto& seg : segments) {
@@ -364,22 +392,20 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     for (const auto& seg : segments) {
       total_columns += static_cast<std::size_t>(seg.w->ne1);
     }
-    pool_.parallel_for(
-        0, total_columns, chunk_for(total_columns), [&](std::size_t begin, std::size_t end, int) {
-          std::size_t offset = 0;
-          for (const auto& seg : segments) {
-            const auto n_out = static_cast<std::size_t>(seg.w->ne1);
-            const std::size_t lo = std::max(begin, offset);
-            const std::size_t hi = std::min(end, offset + n_out);
-            if (lo < hi) {
-              for (std::size_t r = 0; r < seq; ++r) {
-                matmul_columns(k, *seg.w, x + r * n_in, quantized ? a.xq.data() + r * nb : nullptr,
-                               seg.y + r * n_out, lo - offset, hi - offset, exact_activations_);
-              }
-            }
-            offset += n_out;
-          }
-        });
+    pool_.parallel_for(0, total_columns, chunk_for(total_columns),
+                       [&](std::size_t begin, std::size_t end, int) {
+                         std::size_t offset = 0;
+                         for (const auto& seg : segments) {
+                           const auto n_out = static_cast<std::size_t>(seg.w->ne1);
+                           const std::size_t lo = std::max(begin, offset);
+                           const std::size_t hi = std::min(end, offset + n_out);
+                           if (lo < hi) {
+                             matmul_columns(k, *seg.w, x, quantized ? a.xq.data() : nullptr, seg.y,
+                                            seq, lo - offset, hi - offset, exact_activations_);
+                           }
+                           offset += n_out;
+                         }
+                       });
     tick(slot);
   };
   const auto mm = [&](const Tensor& w, const float* x, float* y, ForwardProfile::Slot slot) {
@@ -469,16 +495,15 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
       if (quantized) {
         tick(ForwardProfile::kQuantize);
       }
-      const std::size_t nb = n_embd / kQK8_0;
       pool_.parallel_for(0, n_ff, chunk_for(n_ff), [&](std::size_t begin, std::size_t end, int) {
+        const BlockQ8_0* xq = quantized ? a.xq.data() : nullptr;
+        matmul_columns(k, w.w_gate, a.h.data(), xq, a.gate.data(), seq, begin, end,
+                       exact_activations_);
+        matmul_columns(k, w.w_up, a.h.data(), xq, a.up.data(), seq, begin, end, exact_activations_);
         for (std::size_t r = 0; r < seq; ++r) {
-          const float* x = a.h.data() + r * n_embd;
-          const BlockQ8_0* xq = quantized ? a.xq.data() + r * nb : nullptr;
-          float* gate = a.gate.data() + r * n_ff;
-          float* up = a.up.data() + r * n_ff;
-          matmul_columns(k, w.w_gate, x, xq, gate, begin, end, exact_activations_);
-          matmul_columns(k, w.w_up, x, xq, up, begin, end, exact_activations_);
-          k.silu_mul(gate + begin, up + begin, gate + begin, end - begin);
+          float* gate = a.gate.data() + r * n_ff + begin;
+          const float* up = a.up.data() + r * n_ff + begin;
+          k.silu_mul(gate, up, gate, end - begin);
         }
       });
       tick(ForwardProfile::kGateUp);

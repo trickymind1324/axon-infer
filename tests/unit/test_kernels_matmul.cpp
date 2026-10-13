@@ -65,13 +65,13 @@ TEST_CASE("row matmuls match the fixtures", "[kernels][matmul]") {
     std::vector<float> y(n_rows * n_out);
     if (base == "matmul_f32") {
       const auto weights = w.as_f32();
-      k().matmul_f32_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in);
+      k().matmul_f32_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in, n_out);
     } else if (base == "matmul_f16") {
       const auto weights = w.as_u16();
-      k().matmul_f16_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in);
+      k().matmul_f16_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in, n_out);
     } else {
       const auto weights = w.as_u16();
-      k().matmul_bf16_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in);
+      k().matmul_bf16_rows(weights.data(), rows.data(), y.data(), n_rows, n_out, n_in, n_out);
     }
     INFO(name);
     CHECK(axon::test::max_abs_diff(y, expected) < 1e-5F);

@@ -39,11 +39,11 @@ struct KernelTable {
                       std::size_t n_in);
   // Y[n_rows][n_out] = X[n_rows][n_in] W^T (prefill)
   void (*matmul_f32_rows)(const float* w, const float* x, float* y, std::size_t n_rows,
-                          std::size_t n_out, std::size_t n_in);
+                          std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_f16_rows)(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                          std::size_t n_out, std::size_t n_in);
+                          std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_bf16_rows)(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                           std::size_t n_out, std::size_t n_in);
+                           std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 
   // y = x / sqrt(mean(x^2) + eps) * weight
   void (*rmsnorm)(const float* x, const float* weight, float* y, std::size_t n, float eps);
@@ -99,13 +99,13 @@ struct KernelTable {
                          std::size_t n_in);
   // Rows variants: Y[n_rows][n_out] from X[n_rows][n_in] (float rows or Q8_0 block rows).
   void (*matmul_q8_0_rows)(const BlockQ8_0* w, const float* x, float* y, std::size_t n_rows,
-                           std::size_t n_out, std::size_t n_in);
+                           std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_q4_0_rows)(const BlockQ4_0* w, const float* x, float* y, std::size_t n_rows,
-                           std::size_t n_out, std::size_t n_in);
+                           std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_q8_0_q8_rows)(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                              std::size_t n_out, std::size_t n_in);
+                              std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_q4_0_q8_rows)(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                              std::size_t n_out, std::size_t n_in);
+                              std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   // Activation quantization, one row of n floats (a multiple of 32) into n / 32 blocks.
   void (*quantize_row_q8_0)(const float* x, BlockQ8_0* out, std::size_t n);
 
@@ -116,15 +116,15 @@ struct KernelTable {
   void (*matmul_q4_1_q8)(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
                          std::size_t n_in);
   void (*matmul_q4_1_rows)(const BlockQ4_1* w, const float* x, float* y, std::size_t n_rows,
-                           std::size_t n_out, std::size_t n_in);
+                           std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   void (*matmul_q4_1_q8_rows)(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                              std::size_t n_out, std::size_t n_in);
+                              std::size_t n_out, std::size_t n_in, std::size_t y_stride);
   // Q6_K with float activations only: each 256-element super-block is dequantized and dotted.
   // Used for output and embedding matrices, n_in a multiple of 256.
   void (*matmul_q6_k)(const BlockQ6_K* w, const float* x, float* y, std::size_t n_out,
                       std::size_t n_in);
   void (*matmul_q6_k_rows)(const BlockQ6_K* w, const float* x, float* y, std::size_t n_rows,
-                           std::size_t n_out, std::size_t n_in);
+                           std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 };
 
 // The scalar reference table, the baseline every optimized table is tested against and the

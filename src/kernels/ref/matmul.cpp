@@ -26,9 +26,9 @@ void gemv(const Weight* w, const float* x, float* y, std::size_t n_out, std::siz
 
 template <class Weight, class Convert>
 void gemm_rows(const Weight* w, const float* x, float* y, std::size_t n_rows, std::size_t n_out,
-               std::size_t n_in, Convert convert) {
+               std::size_t n_in, std::size_t y_stride, Convert convert) {
   for (std::size_t r = 0; r < n_rows; ++r) {
-    gemv(w, x + r * n_in, y + r * n_out, n_out, n_in, convert);
+    gemv(w, x + r * n_in, y + r * y_stride, n_out, n_in, convert);
   }
 }
 
@@ -53,18 +53,18 @@ void matmul_bf16(const std::uint16_t* w, const float* x, float* y, std::size_t n
 }
 
 void matmul_f32_rows(const float* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in) {
-  gemm_rows(w, x, y, n_rows, n_out, n_in, identity);
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
+  gemm_rows(w, x, y, n_rows, n_out, n_in, y_stride, identity);
 }
 
 void matmul_f16_rows(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in) {
-  gemm_rows(w, x, y, n_rows, n_out, n_in, fp16_to_fp32);
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
+  gemm_rows(w, x, y, n_rows, n_out, n_in, y_stride, fp16_to_fp32);
 }
 
 void matmul_bf16_rows(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in) {
-  gemm_rows(w, x, y, n_rows, n_out, n_in, bf16_to_fp32);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride) {
+  gemm_rows(w, x, y, n_rows, n_out, n_in, y_stride, bf16_to_fp32);
 }
 
 }  // namespace axon::kernels::ref

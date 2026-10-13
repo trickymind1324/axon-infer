@@ -91,8 +91,8 @@ TEST_CASE("NEON float matmuls stay within the locked tolerance of scalar", "[ker
       const auto xs = random_floats(3 * n_in, static_cast<std::uint32_t>(n_in + 2));
       std::vector<float> ra(3 * n_out);
       std::vector<float> rb(3 * n_out);
-      scalar().matmul_f32_rows(w.data(), xs.data(), ra.data(), 3, n_out, n_in);
-      neon.matmul_f32_rows(w.data(), xs.data(), rb.data(), 3, n_out, n_in);
+      scalar().matmul_f32_rows(w.data(), xs.data(), ra.data(), 3, n_out, n_in, n_out);
+      neon.matmul_f32_rows(w.data(), xs.data(), rb.data(), 3, n_out, n_in, n_out);
       for (std::size_t r = 0; r < 3; ++r) {
         const std::vector<float> pa(ra.begin() + static_cast<std::ptrdiff_t>(r * n_out),
                                     ra.begin() + static_cast<std::ptrdiff_t>((r + 1) * n_out));
@@ -164,14 +164,14 @@ TEST_CASE("NEON activation quantization and integer matmuls are bit-identical to
       }
       std::vector<float> ra(3 * n_out);
       std::vector<float> rb(3 * n_out);
-      scalar().matmul_q8_0_q8_rows(w8.data(), xrows.data(), ra.data(), 3, n_out, n_in);
-      neon.matmul_q8_0_q8_rows(w8.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      scalar().matmul_q8_0_q8_rows(w8.data(), xrows.data(), ra.data(), 3, n_out, n_in, n_out);
+      neon.matmul_q8_0_q8_rows(w8.data(), xrows.data(), rb.data(), 3, n_out, n_in, n_out);
       CHECK(ra == rb);
-      scalar().matmul_q4_0_q8_rows(w4.data(), xrows.data(), ra.data(), 3, n_out, n_in);
-      neon.matmul_q4_0_q8_rows(w4.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      scalar().matmul_q4_0_q8_rows(w4.data(), xrows.data(), ra.data(), 3, n_out, n_in, n_out);
+      neon.matmul_q4_0_q8_rows(w4.data(), xrows.data(), rb.data(), 3, n_out, n_in, n_out);
       CHECK(ra == rb);
-      scalar().matmul_q4_1_q8_rows(w41.data(), xrows.data(), ra.data(), 3, n_out, n_in);
-      neon.matmul_q4_1_q8_rows(w41.data(), xrows.data(), rb.data(), 3, n_out, n_in);
+      scalar().matmul_q4_1_q8_rows(w41.data(), xrows.data(), ra.data(), 3, n_out, n_in, n_out);
+      neon.matmul_q4_1_q8_rows(w41.data(), xrows.data(), rb.data(), 3, n_out, n_in, n_out);
       CHECK(ra == rb);
     }
   }
@@ -212,8 +212,8 @@ TEST_CASE("NEON Q6_K matmul stays within the locked tolerance of scalar", "[kern
       const auto xs = random_floats(3 * n_in, static_cast<std::uint32_t>(n_in + 6));
       std::vector<float> ra(3 * n_out);
       std::vector<float> rb(3 * n_out);
-      scalar().matmul_q6_k_rows(w.data(), xs.data(), ra.data(), 3, n_out, n_in);
-      neon.matmul_q6_k_rows(w.data(), xs.data(), rb.data(), 3, n_out, n_in);
+      scalar().matmul_q6_k_rows(w.data(), xs.data(), ra.data(), 3, n_out, n_in, n_out);
+      neon.matmul_q6_k_rows(w.data(), xs.data(), rb.data(), 3, n_out, n_in, n_out);
       for (std::size_t r = 0; r < 3; ++r) {
         const std::vector<float> pa(ra.begin() + static_cast<std::ptrdiff_t>(r * n_out),
                                     ra.begin() + static_cast<std::ptrdiff_t>((r + 1) * n_out));

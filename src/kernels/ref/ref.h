@@ -15,11 +15,11 @@ void matmul_f16(const std::uint16_t* w, const float* x, float* y, std::size_t n_
 void matmul_bf16(const std::uint16_t* w, const float* x, float* y, std::size_t n_out,
                  std::size_t n_in);
 void matmul_f32_rows(const float* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in);
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_f16_rows(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                     std::size_t n_out, std::size_t n_in);
+                     std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_bf16_rows(const std::uint16_t* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 
 void rmsnorm(const float* x, const float* weight, float* y, std::size_t n, float eps);
 void rope(float* x, std::size_t n_heads, std::size_t pos, const RopeParams& params);
@@ -49,23 +49,23 @@ void matmul_q8_0_q8(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size
 void matmul_q4_0_q8(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
                     std::size_t n_in);
 void matmul_q8_0_rows(const BlockQ8_0* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_q4_0_rows(const BlockQ4_0* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_q8_0_q8_rows(const BlockQ8_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in);
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_q4_0_q8_rows(const BlockQ4_0* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in);
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void quantize_row_q8_0(const float* x, BlockQ8_0* out, std::size_t n);
 void matmul_q4_1(const BlockQ4_1* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
 void matmul_q4_1_q8(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_out,
                     std::size_t n_in);
 void matmul_q4_1_rows(const BlockQ4_1* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_q4_1_q8_rows(const BlockQ4_1* w, const BlockQ8_0* xq, float* y, std::size_t n_rows,
-                         std::size_t n_out, std::size_t n_in);
+                         std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 void matmul_q6_k(const BlockQ6_K* w, const float* x, float* y, std::size_t n_out, std::size_t n_in);
 void matmul_q6_k_rows(const BlockQ6_K* w, const float* x, float* y, std::size_t n_rows,
-                      std::size_t n_out, std::size_t n_in);
+                      std::size_t n_out, std::size_t n_in, std::size_t y_stride);
 
 }  // namespace axon::kernels::ref

@@ -93,7 +93,7 @@ TEST_CASE("Q6_K matmul dequantizes super-blocks", "[kernels][quant]") {
         1e-3F);
   const auto xs = axon::test::load_axt("matmul_q6_k.xs", "quant").as_f32();
   std::vector<float> ys(std::size_t{3} * 5);
-  k().matmul_q6_k_rows(w.data(), xs.data(), ys.data(), 3, 5, 256);
+  k().matmul_q6_k_rows(w.data(), xs.data(), ys.data(), 3, 5, 256, 5);
   CHECK(axon::test::max_abs_diff(ys, axon::test::load_axt("matmul_q6_k.ys", "quant").as_f32()) <
         1e-3F);
 }
@@ -113,21 +113,21 @@ TEST_CASE("quantized row matmuls match for both activation paths", "[kernels][qu
     INFO(name);
     if (base == "matmul_q8_0") {
       const auto w = blocks_of<axon::BlockQ8_0>(base + ".w.bin");
-      k().matmul_q8_0_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q8_0_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
-      k().matmul_q8_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q8_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
     } else if (base == "matmul_q4_0") {
       const auto w = blocks_of<axon::BlockQ4_0>(base + ".w.bin");
-      k().matmul_q4_0_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q4_0_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
-      k().matmul_q4_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q4_0_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
     } else {
       const auto w = blocks_of<axon::BlockQ4_1>(base + ".w.bin");
-      k().matmul_q4_1_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q4_1_rows(w.data(), xs.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ys) < 1e-4F);
-      k().matmul_q4_1_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn);
+      k().matmul_q4_1_q8_rows(w.data(), xq.data(), y.data(), rows, kOut, kIn, kOut);
       CHECK(axon::test::max_abs_diff(y, ysq) < 1e-5F);
     }
   }
