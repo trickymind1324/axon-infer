@@ -92,6 +92,22 @@ TEST_CASE("tiled multi-row kernels equal the single-row kernel row by row",
         }
       }
       const std::size_t nb = n_in / 32;
+      std::vector<std::uint16_t> w16(wf.size());
+      for (std::size_t i = 0; i < wf.size(); ++i) {
+        w16[i] = axon::fp32_to_fp16(wf[i]);
+      }
+      check_rows(
+          "f32", n_rows, n_out,
+          [&](float* y) { k.matmul_f32_rows(wf.data(), x.data(), y, n_rows, n_out, n_in, n_out); },
+          [&](std::size_t r, float* y) {
+            k.matmul_f32(wf.data(), x.data() + r * n_in, y, n_out, n_in);
+          });
+      check_rows(
+          "f16", n_rows, n_out,
+          [&](float* y) { k.matmul_f16_rows(w16.data(), x.data(), y, n_rows, n_out, n_in, n_out); },
+          [&](std::size_t r, float* y) {
+            k.matmul_f16(w16.data(), x.data() + r * n_in, y, n_out, n_in);
+          });
       check_rows(
           "q8_0 q8", n_rows, n_out,
           [&](float* y) {

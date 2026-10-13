@@ -268,6 +268,32 @@ void bm_matmul_int_rows(benchmark::State& state) {
                               : w8.size() * sizeof(axon::BlockQ8_0));
 }
 
+// F32 and F16 weights over kBenchRows rows. Args are {n_out, n_in, half, table}.
+void bm_matmul_float_rows(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const bool half = state.range(2) != 0;
+  const auto& k = state.range(3) == 0 ? axon::kernels::scalar_kernels()
+                                      : **axon::kernels::select(axon::kernels::KernelSet::Auto);
+  const auto w = random_floats(n_out * n_in, 1);
+  std::vector<std::uint16_t> w16(w.size());
+  for (std::size_t i = 0; i < w.size(); ++i) {
+    w16[i] = axon::fp32_to_fp16(w[i]);
+  }
+  const auto x = random_floats(kBenchRows * n_in, 2);
+  std::vector<float> y(kBenchRows * n_out);
+  for (auto _ : state) {
+    if (half) {
+      k.matmul_f16_rows(w16.data(), x.data(), y.data(), kBenchRows, n_out, n_in, n_out);
+    } else {
+      k.matmul_f32_rows(w.data(), x.data(), y.data(), kBenchRows, n_out, n_in, n_out);
+    }
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul_rows(state, n_out, n_in, half ? w16.size() * 2 : w.size() * 4);
+}
+
 void bm_matmul_q6_k_rows(benchmark::State& state) {
   const auto n_out = static_cast<std::size_t>(state.range(0));
   const auto n_in = static_cast<std::size_t>(state.range(1));
@@ -339,6 +365,11 @@ BENCHMARK(bm_matmul_q6_k)
     ->Args({2048, 2048, 1})
     ->Args({8192, 2048, 1});
 BENCHMARK(bm_matmul_q6_k_rows)->Args({2048, 2048, 0})->Args({2048, 2048, 1});
+BENCHMARK(bm_matmul_float_rows)
+    ->Args({2048, 2048, 0, 0})
+    ->Args({2048, 2048, 0, 1})
+    ->Args({2048, 2048, 1, 0})
+    ->Args({2048, 2048, 1, 1});
 BENCHMARK(bm_matmul_int_rows)
     ->Args({2048, 2048, 0, 0})
     ->Args({2048, 2048, 0, 1})
