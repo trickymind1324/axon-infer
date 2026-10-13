@@ -193,6 +193,58 @@ void bm_matmul_q6_k(benchmark::State& state) {
 // Launch cost as the model sees it: a single-threaded gap of `gap_us` between launches, like
 // the RMSNorm and RoPE work between matmuls, then one trivial parallel_for. Args are
 // {threads, spin budget us, gap us}. The reported time minus the gap is the launch cost.
+// Multi-row matmul at the prompt-sized row count the model's prefill chunks use, reported per
+// weight-row pass so the GFLOP/s column reads against the single-row rows above. Args are
+// {n_out, n_in, table}.
+constexpr std::size_t kBenchRows = 32;
+
+void report_matmul_rows(benchmark::State& state, std::size_t n_out, std::size_t n_in,
+                        std::size_t weight_bytes) {
+  const auto calls = static_cast<double>(state.iterations());
+  state.counters["GFLOP/s"] =
+      benchmark::Counter(calls * 2.0 * static_cast<double>(kBenchRows * n_out * n_in),
+                         benchmark::Counter::kIsRate, benchmark::Counter::kIs1000);
+  state.counters["GB/s"] =
+      benchmark::Counter(calls * static_cast<double>(weight_bytes), benchmark::Counter::kIsRate,
+                         benchmark::Counter::kIs1000);
+}
+
+std::vector<axon::BlockQ6_K> random_q6_k(std::size_t n_blocks) {
+  std::vector<axon::BlockQ6_K> wq(n_blocks);
+  std::uint32_t pattern = 0x2545F491U;
+  for (auto& block : wq) {
+    for (auto& q : block.ql) {
+      pattern = pattern * 1664525U + 1013904223U;
+      q = static_cast<std::uint8_t>(pattern >> 24);
+    }
+    for (auto& q : block.qh) {
+      pattern = pattern * 1664525U + 1013904223U;
+      q = static_cast<std::uint8_t>(pattern >> 24);
+    }
+    for (auto& sc : block.scales) {
+      pattern = pattern * 1664525U + 1013904223U;
+      sc = static_cast<std::int8_t>(pattern >> 25);
+    }
+    block.d = axon::fp32_to_fp16(0.001F);
+  }
+  return wq;
+}
+
+void bm_matmul_q6_k_rows(benchmark::State& state) {
+  const auto n_out = static_cast<std::size_t>(state.range(0));
+  const auto n_in = static_cast<std::size_t>(state.range(1));
+  const auto wq = random_q6_k(n_out * n_in / 256);
+  const auto x = random_floats(kBenchRows * n_in, 2);
+  std::vector<float> y(kBenchRows * n_out);
+  const auto& k = table_for(state);
+  for (auto _ : state) {
+    k.matmul_q6_k_rows(wq.data(), x.data(), y.data(), kBenchRows, n_out, n_in, n_out);
+    benchmark::DoNotOptimize(y.data());
+    benchmark::ClobberMemory();
+  }
+  report_matmul_rows(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ6_K));
+}
+
 void bm_launch_after_gap(benchmark::State& state) {
   const auto threads = static_cast<int>(state.range(0));
   const auto budget = static_cast<int>(state.range(1));
@@ -248,6 +300,7 @@ BENCHMARK(bm_matmul_q6_k)
     ->Args({8192, 2048, 0})
     ->Args({2048, 2048, 1})
     ->Args({8192, 2048, 1});
+BENCHMARK(bm_matmul_q6_k_rows)->Args({2048, 2048, 0})->Args({2048, 2048, 1});
 BENCHMARK(bm_launch_after_gap)
     ->ArgsProduct({{2, 4, 8}, {0, 50, 200, 1000}, {30}})
     ->UseRealTime()
