@@ -57,8 +57,32 @@ def scaling(records, model: str, step: str) -> str:
 def provenance(records) -> str:
     lines = ["| File | Host | CPU | Commit | Date | Model SHA256 |", "|---|---|---|---|---|---|"]
     for r in records:
+        commit = f"{r['commit']}{' (dirty)' if r.get('dirty') else ''}"
+        if r["step"] == "llamacpp":
+            commit = f"llama.cpp {r['llamacpp']['commit'][:12]}"
         lines.append(f"| {r['host']}-{r['step']}-{r['model']['file']}-t{r['threads']} | {r['host']} | {r['cpu']} | "
-                     f"{r['commit']}{' (dirty)' if r.get('dirty') else ''} | {r['date'][:10]} | {r['model']['sha256'][:12]} |")
+                     f"{commit} | {r['date'][:10]} | {r['model']['sha256'][:12]} |")
+    return "\n".join(lines)
+
+
+def comparison(records) -> str:
+    """The engine's latest step against llama.cpp on the same model and thread count, as the
+    engine's share of llama.cpp. Only pairs that exist on both sides are shown."""
+    engine = [r for r in records if r["step"] != "llamacpp"]
+    theirs = [r for r in records if r["step"] == "llamacpp"]
+    lines = ["| Model | Threads | Engine step | Prefill tok/s (engine) | Prefill tok/s (llama.cpp) | Share | "
+             "Decode tok/s (engine) | Decode tok/s (llama.cpp) | Share |",
+             "|---|---|---|---|---|---|---|---|---|"]
+    for t in sorted(theirs, key=lambda r: (r["model"]["file"], r["threads"])):
+        ours = [r for r in engine if r["model"]["file"] == t["model"]["file"] and r["threads"] == t["threads"]
+                and r.get("cache", "f32") == "f32"]
+        if not ours:
+            continue
+        latest = max(ours, key=lambda r: r["step"])
+        p_ours, p_theirs = latest["prefill_tok_s"]["median"], t["prefill_tok_s"]["median"]
+        d_ours, d_theirs = latest["decode_tok_s"]["median"], t["decode_tok_s"]["median"]
+        lines.append(f"| {t['model']['file']} | {t['threads']} | {latest['step']} | {p_ours:.1f} | {p_theirs:.1f} | "
+                     f"{100 * p_ours / p_theirs:.0f}% | {d_ours:.2f} | {d_theirs:.2f} | {100 * d_ours / d_theirs:.0f}% |")
     return "\n".join(lines)
 
 
@@ -76,6 +100,12 @@ EXPECTED_SCALING = """Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06a-thr
 | 1 | 10.0 | 5.00 | 1.00x | 1.00x |
 | 2 | 20.0 | 10.00 | 2.00x | 2.00x |"""
 EXPECTED_E2E_ROW = "| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 2 | 20.0 | 10.00 | 1.00 | 1% |"
+SAMPLE_LLAMACPP = {
+    "step": "llamacpp", "date": "2026-10-03T10:00:00Z", "host": "m1", "cpu": "Apple M1", "commit": "abcdef123456",
+    "model": {"file": "SmolLM2-135M-Instruct-Q8_0", "sha256": "0123456789abcdef"}, "threads": 2,
+    "prefill_tok_s": {"median": 50.0, "best": 55.0}, "decode_tok_s": {"median": 12.5, "best": 13.0},
+}
+EXPECTED_COMPARISON_ROW = "| SmolLM2-135M-Instruct-Q8_0 | 2 | 06a-threads | 20.0 | 50.0 | 40% | 10.00 | 12.50 | 80% |"
 
 
 def main() -> int:
@@ -83,19 +113,26 @@ def main() -> int:
         got = scaling(SAMPLE, "SmolLM2-135M-Instruct-Q8_0", "06a-threads")
         assert got == EXPECTED_SCALING, got
         assert EXPECTED_E2E_ROW in end_to_end(SAMPLE), end_to_end(SAMPLE)
+        got = comparison(SAMPLE + [SAMPLE_LLAMACPP])
+        assert EXPECTED_COMPARISON_ROW in got, got
+        assert comparison(SAMPLE).count("\n") == 1, comparison(SAMPLE)
         print("render_tables self-test passed")
         return 0
     records = load(RESULTS.glob("*.json"))
     if not records:
         print("no results under", RESULTS)
         return 1
+    engine = [r for r in records if r["step"] != "llamacpp"]
     print("## End to end\n")
-    print(end_to_end(records))
-    for step in sorted({r["step"] for r in records}):
+    print(end_to_end(engine))
+    for step in sorted({r["step"] for r in engine}):
         for model in sorted({r["model"]["file"] for r in records if r["step"] == step}):
-            table = scaling(records, model, step)
+            table = scaling(engine, model, step)
             if table.count("\n") > 4:
                 print("\n" + table)
+    if any(r["step"] == "llamacpp" for r in records):
+        print("\n## Against llama.cpp\n")
+        print(comparison(records))
     print("\n## Provenance\n")
     print(provenance(records))
     return 0
