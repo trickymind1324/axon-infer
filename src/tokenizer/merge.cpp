@@ -12,10 +12,14 @@ MergeRanks::MergeRanks(const std::vector<std::string_view>& merges) {
 }
 
 std::int32_t MergeRanks::rank(std::string_view left, std::string_view right) const {
-  key_.assign(left);
-  key_.push_back(' ');
-  key_.append(right);
-  const auto it = ranks_.find(key_);
+  // The lookup key is built in a per-thread buffer, so encoding is safe from several threads
+  // at once (the server tokenizes requests on its connection threads) and still allocates
+  // nothing once the buffer has grown.
+  thread_local std::string key;
+  key.assign(left);
+  key.push_back(' ');
+  key.append(right);
+  const auto it = ranks_.find(key);
   return it == ranks_.end() ? -1 : it->second;
 }
 

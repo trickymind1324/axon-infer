@@ -30,7 +30,6 @@ public:
 
 private:
   std::unordered_map<std::string, std::int32_t> ranks_;
-  mutable std::string key_;
 };
 
 // Repeatedly merges the adjacent pair with the lowest rank (ties: leftmost) until no pair is a
