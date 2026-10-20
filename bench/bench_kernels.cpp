@@ -309,6 +309,35 @@ void bm_matmul_q6_k_rows(benchmark::State& state) {
   report_matmul_rows(state, n_out, n_in, wq.size() * sizeof(axon::BlockQ6_K));
 }
 
+// Attention over a 512-position cache at SmolLM2's head shape (9 heads over 3 kv heads of 64),
+// for one query row (decode) and sixteen (a prefill work item). Args are {n_q, table}.
+void bm_attention(benchmark::State& state) {
+  const auto n_q = static_cast<std::size_t>(state.range(0));
+  const auto& k = state.range(1) == 0 ? axon::kernels::scalar_kernels()
+                                      : **axon::kernels::select(axon::kernels::KernelSet::Auto);
+  constexpr std::size_t kHeads = 9;
+  constexpr std::size_t kKvHeads = 3;
+  constexpr std::size_t kDim = 64;
+  constexpr std::size_t kPast = 512;
+  const std::size_t total = kPast + n_q;
+  const auto q = random_floats(n_q * kHeads * kDim, 1);
+  const auto kc = random_floats(total * kKvHeads * kDim, 2);
+  const auto vc = random_floats(total * kKvHeads * kDim, 3);
+  std::vector<float> out(n_q * kHeads * kDim);
+  std::vector<float> scores(n_q * total);
+  for (auto _ : state) {
+    k.attention_kv_heads(q.data(), kc.data(), vc.data(), out.data(), scores.data(), n_q, kPast,
+                         kHeads, kKvHeads, kDim, 0.125F, 0, kHeads);
+    benchmark::DoNotOptimize(out.data());
+    benchmark::ClobberMemory();
+  }
+  // Two multiply-adds per key and value element touched.
+  const auto macs = static_cast<double>(n_q) * kHeads * (kPast + 1) * kDim * 2.0;
+  state.counters["GFLOP/s"] =
+      benchmark::Counter(static_cast<double>(state.iterations()) * 2.0 * macs,
+                         benchmark::Counter::kIsRate, benchmark::Counter::kIs1000);
+}
+
 void bm_launch_after_gap(benchmark::State& state) {
   const auto threads = static_cast<int>(state.range(0));
   const auto budget = static_cast<int>(state.range(1));
@@ -375,6 +404,7 @@ BENCHMARK(bm_matmul_int_rows)
     ->Args({2048, 2048, 0, 1})
     ->Args({2048, 2048, 1, 0})
     ->Args({2048, 2048, 1, 1});
+BENCHMARK(bm_attention)->Args({1, 0})->Args({1, 1})->Args({16, 0})->Args({16, 1});
 BENCHMARK(bm_launch_after_gap)
     ->ArgsProduct({{2, 4, 8}, {0, 50, 200, 1000}, {30}})
     ->UseRealTime()

@@ -16,6 +16,7 @@ void install(KernelTable& table);
 void install_float(KernelTable& table);
 void install_quant(KernelTable& table);
 void install_q6k(KernelTable& table);
+void install_attention_f32(KernelTable& table);
 void install_attention_f16(KernelTable& table);
 
 }  // namespace axon::kernels::neon

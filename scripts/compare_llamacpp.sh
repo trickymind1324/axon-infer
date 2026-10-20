@@ -16,8 +16,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODEL="${1:?usage: HOST=<host> scripts/compare_llamacpp.sh <model.gguf> <threads>...}"
+MODEL="${1:?usage: HOST=<host> scripts/compare_llamacpp.sh <model.gguf> <threads>... (or --build-only)}"
 shift
+BUILD_ONLY=0
+[ "$MODEL" = "--build-only" ] && BUILD_ONLY=1
 THREAD_COUNTS=("$@")
 [ "${#THREAD_COUNTS[@]}" -gt 0 ] || THREAD_COUNTS=(0)
 HOST="${HOST:-$(hostname -s)}"
@@ -33,7 +35,7 @@ JOBS="${JOBS:-4}"
 AXON="${AXON:-build/release/apps/axon/axon}"
 PYTHON="${PYTHON:-$( [ -x .venv/bin/python ] && echo .venv/bin/python || echo python3 )}"
 [ -x "$AXON" ] || { echo "missing $AXON, build the release preset first (its --version supplies the host metadata)" >&2; exit 1; }
-[ -f "$MODEL" ] || { echo "missing model $MODEL" >&2; exit 1; }
+[ "$BUILD_ONLY" = 1 ] || [ -f "$MODEL" ] || { echo "missing model $MODEL" >&2; exit 1; }
 mkdir -p bench/results third_party
 
 if [ ! -d "$LLAMACPP_DIR/.git" ]; then
@@ -58,6 +60,7 @@ if [ ! -x "$BENCH" ] || [ "$(cat "$LLAMACPP_DIR/build/.axon-commit" 2>/dev/null)
   echo "$RESOLVED" > "$LLAMACPP_DIR/build/.axon-commit"
 fi
 echo "llama.cpp commit $RESOLVED (build number $BUILD_NUMBER)"
+[ "$BUILD_ONLY" = 1 ] && exit 0
 
 VERSION="$("$AXON" --version)"
 CPU="$(printf '%s\n' "$VERSION" | sed -n 's/^cpu: //p')"

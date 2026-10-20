@@ -100,6 +100,10 @@ void matmul_columns(const kernels::KernelTable& k, const Tensor& w, const float*
   }
 }
 
+// Query rows per attention work item. Sixteen rows of a 128-token prefill chunk give eight
+// groups per head, enough items to balance four or eight threads over nine heads.
+constexpr std::size_t kAttentionRows = 16;
+
 bool needs_q8_activations(const Tensor& w, bool exact) {
   return !exact && (w.type == DType::Q8_0 || w.type == DType::Q4_0 || w.type == DType::Q4_1);
 }
@@ -467,16 +471,31 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
         v16[i] = fp32_to_fp16(v_new[i]);
       }
       tick(ForwardProfile::kOther);
-      pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
+    }
+    {
+      // One work item per head and group of query rows, so a prompt spreads over more items
+      // than there are heads. Each item is a plain call on its rows: the row offset moves the
+      // query and output pointers and the past length, and a thread's score scratch, sized for
+      // the whole call, holds any group. Which thread runs a row changes, how it is computed
+      // does not, so the logits stay bit-identical at any thread count.
+      const std::size_t n_groups = (seq + kAttentionRows - 1) / kAttentionRows;
+      const std::size_t q_row = n_head * head_dim;
+      pool_.parallel_for(0, n_head * n_groups, 1, [&](std::size_t begin, std::size_t end, int tid) {
         float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
-        k.attention_kv_heads_f16(a.q.data(), cache->k16(l), cache->v16(l), a.attn.data(), scores,
-                                 seq, n_past, n_head, n_head_kv, head_dim, scale, begin, end);
-      });
-    } else {
-      pool_.parallel_for(0, n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
-        float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
-        k.attention_kv_heads(a.q.data(), k_base, v_base, a.attn.data(), scores, seq, n_past, n_head,
-                             n_head_kv, head_dim, scale, begin, end);
+        for (std::size_t item = begin; item < end; ++item) {
+          const std::size_t h = item % n_head;
+          const std::size_t first = (item / n_head) * kAttentionRows;
+          const std::size_t rows = std::min(kAttentionRows, seq - first);
+          const float* q_rows = a.q.data() + first * q_row;
+          float* out_rows = a.attn.data() + first * q_row;
+          if (half_cache) {
+            k.attention_kv_heads_f16(q_rows, cache->k16(l), cache->v16(l), out_rows, scores, rows,
+                                     n_past + first, n_head, n_head_kv, head_dim, scale, h, h + 1);
+          } else {
+            k.attention_kv_heads(q_rows, k_base, v_base, out_rows, scores, rows, n_past + first,
+                                 n_head, n_head_kv, head_dim, scale, h, h + 1);
+          }
+        }
       });
     }
     tick(ForwardProfile::kAttention);

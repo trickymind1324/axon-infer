@@ -6,6 +6,7 @@ void install(KernelTable& table) {
   install_float(table);
   install_quant(table);
   install_q6k(table);
+  install_attention_f32(table);
   install_attention_f16(table);
 }
 
