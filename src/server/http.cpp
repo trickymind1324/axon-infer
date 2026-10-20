@@ -101,8 +101,8 @@ struct HttpServer::Impl {
 
 HttpServer::HttpServer(model::LlamaModel& model, ServerOptions options)
     : options_(std::move(options)),
-      template_(chat::ChatTemplate::from_tokenizer(model.tokenizer())), engine_(model),
-      impl_(std::make_unique<Impl>()) {
+      template_(chat::ChatTemplate::from_tokenizer(model.tokenizer())),
+      batch_(model, std::max<std::size_t>(1, options_.max_batch)), impl_(std::make_unique<Impl>()) {
   if (options_.served_name.empty()) {
     options_.served_name = std::string(model.file().model_name());
   }
@@ -111,7 +111,8 @@ HttpServer::HttpServer(model::LlamaModel& model, ServerOptions options)
                      .served_name = options_.served_name,
                      .default_max_tokens = options_.default_max_tokens,
                      .max_ctx = model.max_ctx()};
-  worker_ = std::make_unique<Worker>(engine_, options_.max_queue);
+  options_.max_batch = batch_.slots();
+  worker_ = std::make_unique<Worker>(batch_, options_.max_queue);
   routes();
 }
 
@@ -181,9 +182,10 @@ void HttpServer::routes() {
 
   svr.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
     const auto uptime = static_cast<double>(now_unix() - started_unix_);
-    respond_json(
-        res, 200,
-        health_json(options_.served_name, uptime, worker_->served(), worker_->queue_depth()));
+    respond_json(res, 200,
+                 health_json(options_.served_name, uptime, worker_->served(),
+                             worker_->queue_depth(), worker_->running(), worker_->slots(),
+                             worker_->batched_steps()));
   });
   svr.Get("/v1/models", [this](const httplib::Request&, httplib::Response& res) {
     respond_json(res, 200, models_json(options_.served_name, started_unix_));
@@ -242,6 +244,7 @@ void HttpServer::routes() {
         return;
       }
       res.set_header("X-Axon-Queue-Ms", fmt::format("{:.0f}", 1e3 * job->queue_wait_s()));
+      res.set_header("X-Axon-Batch", fmt::format("{}", job->batch_size()));
       respond_json(
           res, 200,
           completion_json(job->request(), id, created, text, job->finish_reason(), job->usage()));

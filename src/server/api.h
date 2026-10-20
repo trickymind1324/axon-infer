@@ -69,7 +69,8 @@ std::int64_t now_unix();
 nlohmann::json error_json(const ApiError& error);
 nlohmann::json models_json(std::string_view served_name, std::int64_t created);
 nlohmann::json health_json(std::string_view served_name, double uptime_s, std::uint64_t requests,
-                           std::size_t queue);
+                           std::size_t queue, std::size_t running, std::size_t slots,
+                           std::uint64_t batched_steps);
 // The one-body response, finish_reason "stop" or "length".
 nlohmann::json completion_json(const CompletionRequest& req, std::string_view id,
                                std::int64_t created, std::string_view text,

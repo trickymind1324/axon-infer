@@ -381,12 +381,12 @@ json models_json(std::string_view served_name, std::int64_t created) {
 }
 
 json health_json(std::string_view served_name, double uptime_s, std::uint64_t requests,
-                 std::size_t queue) {
-  return {{"status", "ok"},
-          {"model", served_name},
-          {"uptime_s", uptime_s},
-          {"requests", requests},
-          {"queue", queue}};
+                 std::size_t queue, std::size_t running, std::size_t slots,
+                 std::uint64_t batched_steps) {
+  return {{"status", "ok"},       {"model", served_name},
+          {"uptime_s", uptime_s}, {"requests", requests},
+          {"queue", queue},       {"running", running},
+          {"slots", slots},       {"batched_steps", batched_steps}};
 }
 
 json completion_json(const CompletionRequest& req, std::string_view id, std::int64_t created,

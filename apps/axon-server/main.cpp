@@ -54,6 +54,7 @@ struct Cli {
   bool force_scalar = false;
   int max_tokens = 512;
   std::size_t max_queue = 16;
+  std::size_t max_batch = 4;
   std::string api_key;
   std::string served_name;
   std::string log_level = "info";
@@ -85,6 +86,9 @@ int run(int argc, char** argv) {
   app.add_option("--max-queue", opt.max_queue,
                  "requests waiting for the worker before new ones are refused with 503")
       ->default_val(16);
+  app.add_option("--max-batch", opt.max_batch,
+                 "sequences decoded together, each with its own cache of --ctx positions")
+      ->default_val(4);
   app.add_option("--api-key", opt.api_key,
                  "when set, /v1 requests need 'Authorization: Bearer <key>'");
   app.add_option("--served-name", opt.served_name,
@@ -116,6 +120,7 @@ int run(int argc, char** argv) {
        .n_threads = opt.threads,
        .kernels =
            opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+       .max_batch = std::max<std::size_t>(1, opt.max_batch),
        .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
@@ -129,6 +134,7 @@ int run(int argc, char** argv) {
       .host = opt.host,
       .port = opt.port,
       .max_queue = opt.max_queue,
+      .max_batch = opt.max_batch,
       .api_key = opt.api_key,
       .served_name = opt.served_name.empty() ? std::filesystem::path(opt.model).stem().string()
                                              : opt.served_name,
@@ -141,9 +147,10 @@ int run(int argc, char** argv) {
   fmt::print("model: {} ({}), loaded in {:.2f} s, {} threads, {} kernels, context {}, {} cache\n",
              model.file().model_name(), model.config().describe(), load_s, model.n_threads(),
              axon::kernels::name(model.table()), model.max_ctx(), opt.cache);
-  fmt::print("serving '{}' at http://{}:{}/v1 ({}), one request at a time, queue of {}\n",
+  fmt::print("serving '{}' at http://{}:{}/v1 ({}), up to {} sequences at once, queue of {}\n",
              server.served_name(), opt.host, server.port(),
-             opt.api_key.empty() ? "no authentication" : "bearer token required", opt.max_queue);
+             opt.api_key.empty() ? "no authentication" : "bearer token required", opt.max_batch,
+             opt.max_queue);
   std::fflush(stdout);
 
   std::signal(SIGINT, on_signal);

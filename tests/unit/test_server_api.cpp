@@ -245,7 +245,11 @@ TEST_CASE("responses and chunks have the OpenAI shapes", "[server][api]") {
   CHECK(err["error"]["code"] == "model_not_found");
   CHECK(err["error"]["param"].is_null());
   CHECK(axon::server::models_json("synthetic", 5)["data"][0]["id"] == "synthetic");
-  CHECK(axon::server::health_json("synthetic", 1.5, 3, 0)["status"] == "ok");
+  const json health = axon::server::health_json("synthetic", 1.5, 3, 0, 2, 4, 7);
+  CHECK(health["status"] == "ok");
+  CHECK(health["running"] == 2);
+  CHECK(health["slots"] == 4);
+  CHECK(health["batched_steps"] == 7);
   CHECK(axon::server::completion_id(true).starts_with("chatcmpl-"));
   CHECK(axon::server::completion_id(false).size() == 5 + 24);
 }

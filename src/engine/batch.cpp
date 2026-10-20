@@ -79,6 +79,7 @@ Expected<std::size_t> BatchEngine::step() {
   if (oldest) {
     const auto chunk = sequences_[*oldest]->prefill_chunk();
     if (!chunk) {
+      slots_[*oldest].done = {};
       return chunk.error();
     }
   }
@@ -108,6 +109,12 @@ Expected<std::size_t> BatchEngine::step() {
   }
   const auto logits = model_.forward_batch(caches_, tokens_);
   if (!logits) {
+    // The pass failed under every sequence in it: they end without a done call, and the
+    // caller, which gets the error, tells their owners.
+    for (const SlotId i : decoding_) {
+      sequences_[i]->abandon();
+      slots_[i].done = {};
+    }
     return logits.error();
   }
   const std::size_t n_vocab = model_.config().n_vocab;

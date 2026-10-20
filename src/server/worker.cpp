@@ -24,7 +24,6 @@ Job::Poll Job::next(std::string& piece, std::chrono::milliseconds timeout) {
 void Job::cancel() {
   client_gone_.store(true);
   abort_.store(true);
-  // A producer blocked on a full channel must wake up and see the flag.
   ready_.notify_all();
 }
 
@@ -66,8 +65,8 @@ void Job::finish(std::string finish_reason, Usage usage, std::optional<ApiError>
   ready_.notify_all();
 }
 
-Worker::Worker(engine::Engine& engine, std::size_t max_queue)
-    : engine_(engine), max_queue_(max_queue), thread_([this] { run(); }) {}
+Worker::Worker(engine::BatchEngine& batch, std::size_t max_queue)
+    : batch_(batch), max_queue_(max_queue), active_(batch.slots()), thread_([this] { run(); }) {}
 
 Worker::~Worker() {
   stop();
@@ -91,6 +90,10 @@ std::size_t Worker::queue_depth() const {
   return queue_.size();
 }
 
+std::size_t Worker::running() const {
+  return running_.load();
+}
+
 void Worker::stop() {
   {
     const std::scoped_lock lock(mutex_);
@@ -105,75 +108,137 @@ void Worker::stop() {
   }
 }
 
-void Worker::run() {
-  for (;;) {
-    std::shared_ptr<Job> job;
-    {
-      std::unique_lock lock(mutex_);
-      wake_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
-      if (queue_.empty()) {
-        return;  // stopping with nothing left
-      }
-      job = std::move(queue_.front());
-      queue_.pop_front();
-      if (stopping_) {
-        job->finish("stop", {},
-                    ApiError{.status = 503,
-                             .type = "server_error",
-                             .code = "shutting_down",
-                             .message = "the server is shutting down",
-                             .param = std::nullopt});
-        continue;
-      }
-    }
-    job->queue_wait_s_ =
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - job->submitted_).count();
-    if (job->cancelled()) {
-      job->finish("stop", {}, std::nullopt);  // the client left while queued
-      continue;
-    }
-    serve(*job);
-    served_.fetch_add(1);
+void Worker::fail(Job& job, std::string message) {
+  job.finish("stop", {},
+             ApiError{.status = 500,
+                      .type = "server_error",
+                      .code = "generation_failed",
+                      .message = std::move(message),
+                      .param = std::nullopt});
+}
+
+void Worker::admit(std::shared_ptr<Job> job) {
+  job->queue_wait_s_ =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - job->submitted_).count();
+  if (job->cancelled()) {
+    job->finish("stop", {}, std::nullopt);  // the client left while queued
+    return;
+  }
+  const CompletionRequest& req = job->request();
+  engine::GenerateOptions gen = req.gen;
+  gen.cancel = job->abort_flag();
+  auto matcher = std::make_unique<StopMatcher>(req.stop);
+  // The slot is known only once admitted, so the sinks look it up through `this`.
+  const auto slot = batch_.admit(
+      req.prompt, gen,
+      [this, job](std::string_view piece) {
+        for (engine::SlotId s = 0; s < active_.size(); ++s) {
+          if (active_[s].job == job) {
+            on_text(s, piece);
+            return;
+          }
+        }
+      },
+      [this, job](engine::Finish finish, const engine::Stats& stats) {
+        for (engine::SlotId s = 0; s < active_.size(); ++s) {
+          if (active_[s].job == job) {
+            on_done(s, finish, stats);
+            return;
+          }
+        }
+      });
+  if (!slot) {
+    fail(*job, slot.error().message);
+    return;
+  }
+  if (!slot->has_value()) {
+    fail(*job, "no free slot although one was counted");  // cannot happen, admitted under running()
+    return;
+  }
+  active_[**slot] = Active{.job = std::move(job), .matcher = std::move(matcher)};
+  running_.store(batch_.running());
+  active_[**slot].job->batch_size_ = running_.load();
+}
+
+void Worker::on_text(engine::SlotId slot, std::string_view piece) {
+  Active& a = active_[slot];
+  std::string release = a.matcher->feed(piece);
+  if (!release.empty()) {
+    a.job->push(std::move(release));
+  }
+  if (a.matcher->hit()) {
+    a.job->abort();  // a stop string completed, the sequence ends at its next step
   }
 }
 
-void Worker::serve(Job& job) {
-  const CompletionRequest& req = job.request();
-  engine::GenerateOptions gen = req.gen;
-  gen.cancel = job.abort_flag();
-  StopMatcher matcher(req.stop);
-  const auto out = engine_.generate(req.prompt, gen, [&](std::string_view piece) {
-    std::string release = matcher.feed(piece);
-    if (!release.empty()) {
-      job.push(std::move(release));
-    }
-    if (matcher.hit()) {
-      job.abort();  // a stop string completed, the engine stops after this token
-    }
-  });
-  if (!out) {
-    job.finish("stop", {},
-               ApiError{.status = 500,
-                        .type = "server_error",
-                        .code = "generation_failed",
-                        .message = out.error().message,
-                        .param = std::nullopt});
-    return;
-  }
-  std::string tail = matcher.flush();
+void Worker::on_done(engine::SlotId slot, engine::Finish finish, const engine::Stats& stats) {
+  Active& a = active_[slot];
+  std::string tail = a.matcher->flush();
   if (!tail.empty()) {
-    job.push(std::move(tail));
+    a.job->push(std::move(tail));
   }
-  const engine::Stats& stats = engine_.stats();
   std::string reason = "stop";
-  if (!matcher.hit() && !stats.stopped_on_token && !job.cancelled() &&
-      (std::cmp_greater_equal(stats.generated_tokens, req.gen.max_tokens) || stats.context_full)) {
+  if (finish == engine::Finish::Length) {
     reason = "length";
   }
-  job.finish(
+  a.job->finish(
       reason,
       Usage{.prompt_tokens = stats.prompt_tokens, .completion_tokens = stats.generated_tokens},
       std::nullopt);
+  a.job.reset();
+  a.matcher.reset();
+  served_.fetch_add(1);
+}
+
+void Worker::run() {
+  for (;;) {
+    {
+      std::unique_lock lock(mutex_);
+      wake_.wait(lock, [&] { return stopping_ || !queue_.empty() || batch_.busy(); });
+      if (stopping_) {
+        for (auto& job : queue_) {
+          job->finish("stop", {},
+                      ApiError{.status = 503,
+                               .type = "server_error",
+                               .code = "shutting_down",
+                               .message = "the server is shutting down",
+                               .param = std::nullopt});
+        }
+        queue_.clear();
+        for (auto& a : active_) {
+          if (a.job) {
+            fail(*a.job, "the server is shutting down");
+            a.job.reset();
+            a.matcher.reset();
+          }
+        }
+        return;
+      }
+      while (!queue_.empty() && batch_.running() < batch_.slots()) {
+        std::shared_ptr<Job> job = std::move(queue_.front());
+        queue_.pop_front();
+        lock.unlock();
+        admit(std::move(job));
+        lock.lock();
+      }
+    }
+    if (!batch_.busy()) {
+      continue;
+    }
+    const auto finished = batch_.step();
+    batched_steps_.store(batch_.batched_steps());
+    running_.store(batch_.running());
+    if (!finished) {
+      // The pass itself failed: every running job gets the error and its slot is freed.
+      for (auto& a : active_) {
+        if (a.job) {
+          fail(*a.job, finished.error().message);
+          a.job.reset();
+          a.matcher.reset();
+        }
+      }
+    }
+  }
 }
 
 }  // namespace axon::server

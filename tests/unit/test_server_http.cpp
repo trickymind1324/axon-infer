@@ -5,6 +5,7 @@
 
 #if defined(AXON_HAVE_SERVER)
 
+#include "engine/batch.h"
 #include "engine/engine.h"
 #include "fixture_tensor.h"
 #include "model/llama.h"
@@ -28,9 +29,10 @@ namespace {
 using nlohmann::json;
 using namespace std::chrono_literals;
 
-std::unique_ptr<axon::model::LlamaModel> load() {
-  auto m = axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l.gguf"),
-                                         {.max_seq = 8, .max_ctx = 64, .n_threads = 2});
+std::unique_ptr<axon::model::LlamaModel> load(std::size_t max_batch = 1) {
+  auto m = axon::model::LlamaModel::load(
+      axon::test::fixture_path("gguf/synthetic-2l.gguf"),
+      {.max_seq = 8, .max_ctx = 64, .n_threads = 2, .max_batch = max_batch});
   if (!m) {
     FAIL(m.error().message);
   }
@@ -81,7 +83,7 @@ TEST_CASE("the worker serves jobs in order with the engine's text", "[server][wo
   const std::string expected = reference_text(*model, prompt, 12);
   REQUIRE_FALSE(expected.empty());
 
-  axon::engine::Engine engine(*model);
+  axon::engine::BatchEngine engine(*model, 1);
   axon::server::Worker worker(engine, 8);
   std::vector<std::shared_ptr<axon::server::Job>> jobs;
   for (int i = 0; i < 3; ++i) {
@@ -103,7 +105,7 @@ TEST_CASE("the worker serves jobs in order with the engine's text", "[server][wo
 
 TEST_CASE("the worker's queue is bounded and a cancelled job ends early", "[server][worker]") {
   auto model = load();
-  axon::engine::Engine engine(*model);
+  axon::engine::BatchEngine engine(*model, 1);
   const std::vector<std::int32_t> prompt{1, 2, 3};
   {
     axon::server::Worker none(engine, 0);
@@ -143,7 +145,7 @@ TEST_CASE("a stop string ends the job with the text before it", "[server][worker
   const std::size_t at = full.find(stop);
   REQUIRE(at != std::string::npos);
 
-  axon::engine::Engine engine(*model);
+  axon::engine::BatchEngine engine(*model, 1);
   axon::server::Worker worker(engine, 4);
   auto req = greedy_request(prompt, 24);
   req.stop = {stop};
@@ -159,7 +161,8 @@ namespace {
 struct Served {
   std::unique_ptr<axon::model::LlamaModel> model;
   std::unique_ptr<axon::server::HttpServer> server;
-  explicit Served(axon::server::ServerOptions options = {}) : model(load()) {
+  explicit Served(axon::server::ServerOptions options = {}, std::size_t max_batch = 1)
+      : model(load(max_batch)) {
     options.port = 0;
     if (options.served_name.empty()) {
       options.served_name = "synthetic";
@@ -395,6 +398,52 @@ TEST_CASE("the bearer token guards the API routes and the full queue answers 503
     CHECK(full->get_header_value("Retry-After") == "1");
     CHECK(body_of(full)["error"]["code"] == "queue_full");
   }
+}
+
+TEST_CASE("several clients decode together and each gets the answer it gets alone",
+          "[server][http][batch]") {
+  axon::server::ServerOptions options;
+  options.max_batch = 4;
+  Served s(options, 4);
+  const std::vector<std::string> prompts{"alpha", "beta", "gamma", "delta"};
+  std::vector<std::string> expected;
+  {
+    auto cli = s.client();
+    for (const auto& p : prompts) {
+      const json req = {{"prompt", p}, {"max_tokens", 12}, {"temperature", 0}};
+      expected.push_back(body_of(
+          cli.Post("/v1/completions", req.dump(), "application/json"))["choices"][0]["text"]);
+    }
+  }
+  std::vector<std::string> got(prompts.size());
+  std::vector<int> batch_sizes(prompts.size(), 0);
+  std::vector<std::thread> clients;
+  clients.reserve(prompts.size());
+  for (std::size_t i = 0; i < prompts.size(); ++i) {
+    clients.emplace_back([&, i] {
+      auto cli = s.client();
+      const json req = {{"prompt", prompts[i]}, {"max_tokens", 12}, {"temperature", 0}};
+      auto r = cli.Post("/v1/completions", req.dump(), "application/json");
+      if (r && r->status == 200) {
+        got[i] = json::parse(r->body)["choices"][0]["text"];
+        batch_sizes[i] = std::stoi(r->get_header_value("X-Axon-Batch"));
+      }
+    });
+  }
+  for (auto& t : clients) {
+    t.join();
+  }
+  for (std::size_t i = 0; i < prompts.size(); ++i) {
+    INFO(prompts[i]);
+    CHECK(got[i] == expected[i]);
+    CHECK(batch_sizes[i] >= 1);
+  }
+  const json health = body_of(s.client().Get("/health"));
+  CHECK(health["slots"] == 4);
+  CHECK(health["running"] == 0);
+  CHECK(health["requests"] == 8);
+  // Four clients within a few milliseconds on a 2-layer model: at least one step batched them.
+  CHECK(health["batched_steps"].get<int>() > 0);
 }
 
 #endif
