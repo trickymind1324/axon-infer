@@ -1,7 +1,9 @@
 // The NEON table against the scalar table through the whole model. Quantized files run every
-// matmul on an integer path that is bit-identical by construction, so their logits must be
-// equal. The F32 file goes through the float matmuls, whose reduction order differs, so it is
-// held to a tolerance that was measured first (the WARN line) and then locked.
+// matmul on an integer path that is bit-identical by construction. The NEON attention reduces
+// its scores in a different order, a perturbation the activation quantization only shows when
+// a value lands on a rounding boundary, which in this small model none does, so the quantized
+// logits are equal here. The F32 file goes through the float matmuls, whose reduction order
+// differs, so it is held to a tolerance that was measured first (the WARN line) and then locked.
 
 #if defined(AXON_HAVE_NEON)
 

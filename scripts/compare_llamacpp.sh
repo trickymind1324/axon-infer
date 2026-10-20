@@ -28,7 +28,7 @@ PROMPT_TOKENS="${PROMPT_TOKENS:-512}"
 GENERATE="${GENERATE:-128}"
 RUNS="${RUNS:-5}"
 # The commit every published llama.cpp number comes from. Override to measure another one.
-LLAMACPP_COMMIT="${LLAMACPP_COMMIT:-}"
+LLAMACPP_COMMIT="${LLAMACPP_COMMIT:-1ba568c5ad5c6c718984bd2bf4e7c71485b706f9}"
 LLAMACPP_DIR="${LLAMACPP_DIR:-third_party/llama.cpp}"
 LLAMACPP_REPO="${LLAMACPP_REPO:-https://github.com/ggml-org/llama.cpp.git}"
 JOBS="${JOBS:-4}"
