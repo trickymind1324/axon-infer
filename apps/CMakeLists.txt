@@ -1,3 +1,6 @@
 add_subdirectory(axon)
 add_subdirectory(axon-dump)
 add_subdirectory(axon-perplexity)
+if(AXON_BUILD_SERVER)
+  add_subdirectory(axon-server)
+endif()
