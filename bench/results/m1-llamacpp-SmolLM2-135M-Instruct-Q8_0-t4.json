@@ -1,0 +1,48 @@
+{
+ "step": "llamacpp",
+ "date": "2026-10-20T15:00:07Z",
+ "host": "m1",
+ "cpu": "Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16",
+ "ram_gb": 8,
+ "os": "macOS 27.0.1 (arm64)",
+ "commit": "c3fd65d982ca",
+ "model": {
+  "file": "SmolLM2-135M-Instruct-Q8_0",
+  "bytes": 144811360,
+  "sha256": "5a1395716f7913741cc51d98581b9b1228d80987a9f7d3664106742eb06bba83"
+ },
+ "llamacpp": {
+  "commit": "1ba568c5ad5c6c718984bd2bf4e7c71485b706f9",
+  "build_number": 11768,
+  "flags": "-DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_ACCELERATE=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release",
+  "build_commit": "1ba568c5a",
+  "cpu_info": "Apple M1",
+  "backends": "CPU"
+ },
+ "threads": 4,
+ "prompt_tokens": 512,
+ "generated_tokens": 128,
+ "runs": 5,
+ "prefill_tok_s": {
+  "median": 1853.9179632248938,
+  "best": 1891.2270443221507,
+  "samples": [
+   1803.9565509595193,
+   1891.2270443221507,
+   1853.9179632248938,
+   1855.9679481295238,
+   1831.9859559670367
+  ]
+ },
+ "decode_tok_s": {
+  "median": 317.82685885259536,
+  "best": 328.38549435891184,
+  "samples": [
+   312.94099620737023,
+   317.82685885259536,
+   294.66353970332216,
+   328.38549435891184,
+   323.54684835264686
+  ]
+ }
+}

@@ -1,0 +1,48 @@
+{
+ "step": "llamacpp",
+ "date": "2026-10-20T14:59:20Z",
+ "host": "m1",
+ "cpu": "Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16",
+ "ram_gb": 8,
+ "os": "macOS 27.0.1 (arm64)",
+ "commit": "c3fd65d982ca",
+ "model": {
+  "file": "Llama-3.2-1B-Instruct-Q4_0",
+  "bytes": 773025920,
+  "sha256": "fa0390e7c043f89ae1847bd6682d748041a99d4ef3de0e0b27d33b6af97a8be8"
+ },
+ "llamacpp": {
+  "commit": "1ba568c5ad5c6c718984bd2bf4e7c71485b706f9",
+  "build_number": 11768,
+  "flags": "-DGGML_METAL=OFF -DGGML_BLAS=OFF -DGGML_ACCELERATE=OFF -DLLAMA_CURL=OFF -DCMAKE_BUILD_TYPE=Release",
+  "build_commit": "1ba568c5a",
+  "cpu_info": "Apple M1",
+  "backends": "CPU"
+ },
+ "threads": 8,
+ "prompt_tokens": 512,
+ "generated_tokens": 128,
+ "runs": 5,
+ "prefill_tok_s": {
+  "median": 347.6020071645159,
+  "best": 355.5194273750795,
+  "samples": [
+   329.3113292905865,
+   355.5194273750795,
+   352.2989815692875,
+   347.550972029201,
+   347.6020071645159
+  ]
+ },
+ "decode_tok_s": {
+  "median": 48.28916684279197,
+  "best": 50.37510925834818,
+  "samples": [
+   48.17212274597543,
+   50.37510925834818,
+   48.28916684279197,
+   49.505368541234816,
+   46.53860913912844
+  ]
+ }
+}

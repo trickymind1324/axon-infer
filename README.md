@@ -204,7 +204,7 @@ Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes 
 $ ./build/release/apps/axon/axon bench -m models/SmolLM2-135M-Instruct-Q8_0.gguf --threads 4
 ```
 
-The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, `06b-neon` runs the NEON kernel table, `06d-fused` merges the launches that share an input and keeps idle workers spinning for a short budget, and `06d-f16cache` is the same build with `--cache f16`. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
+The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, `06b-neon` runs the NEON kernel table, `06d-fused` merges the launches that share an input and keeps idle workers spinning for a short budget, `06d-f16cache` is the same build with `--cache f16`, and `06e-gemm` runs prefill through multi-row kernel tiles and a NEON attention kernel. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
 
 | Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |
 |---|---|---|---|---|---|---|
@@ -254,32 +254,43 @@ The steps are the optimizations in the order they landed: `06a-static` split wor
 | 06d-fused | SmolLM2-135M-Instruct-f16 | 2 | 103.9 | 74.39 | 20.02 | 29% |
 | 06d-fused | SmolLM2-135M-Instruct-f16 | 4 | 170.3 | 107.23 | 28.86 | 42% |
 | 06d-fused | SmolLM2-135M-Instruct-f16 | 8 | 220.3 | 68.78 | 18.51 | 27% |
+| 06e-gemm | Llama-3.2-1B-Instruct-Q4_0 | 1 | 34.5 | 13.27 | 10.15 | 15% |
+| 06e-gemm | Llama-3.2-1B-Instruct-Q4_0 | 4 | 97.7 | 37.47 | 28.68 | 42% |
+| 06e-gemm | Llama-3.2-1B-Instruct-Q4_0 | 8 | 117.8 | 40.73 | 31.17 | 46% |
+| 06e-gemm | SmolLM2-135M-Instruct-Q8_0 | 1 | 383.4 | 141.13 | 20.18 | 30% |
+| 06e-gemm | SmolLM2-135M-Instruct-Q8_0 | 2 | 662.5 | 178.72 | 25.56 | 37% |
+| 06e-gemm | SmolLM2-135M-Instruct-Q8_0 | 4 | 1138.4 | 208.78 | 29.86 | 44% |
+| 06e-gemm | SmolLM2-135M-Instruct-Q8_0 | 8 | 1318.1 | 132.94 | 19.01 | 28% |
+| 06e-gemm | SmolLM2-135M-Instruct-f16 | 1 | 165.1 | 50.81 | 13.67 | 20% |
+| 06e-gemm | SmolLM2-135M-Instruct-f16 | 2 | 300.5 | 91.69 | 24.67 | 36% |
+| 06e-gemm | SmolLM2-135M-Instruct-f16 | 4 | 482.2 | 136.16 | 36.64 | 54% |
+| 06e-gemm | SmolLM2-135M-Instruct-f16 | 8 | 644.3 | 95.85 | 25.79 | 38% |
 
-Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06d-fused, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 13.5 | 12.06 | 1.00x | 1.00x |
-| 4 | 38.8 | 32.85 | 2.86x | 2.72x |
-| 8 | 47.9 | 33.38 | 3.53x | 2.77x |
-
-Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06d-fused, relative to 1 thread(s):
-
-| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
-|---|---|---|---|---|
-| 1 | 177.4 | 92.61 | 1.00x | 1.00x |
-| 2 | 328.0 | 129.09 | 1.85x | 1.39x |
-| 4 | 548.2 | 155.94 | 3.09x | 1.68x |
-| 8 | 628.4 | 98.49 | 3.54x | 1.06x |
-
-Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06d-fused, relative to 1 thread(s):
+Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06e-gemm, relative to 1 thread(s):
 
 | Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
 |---|---|---|---|---|
-| 1 | 53.9 | 43.29 | 1.00x | 1.00x |
-| 2 | 103.9 | 74.39 | 1.93x | 1.72x |
-| 4 | 170.3 | 107.23 | 3.16x | 2.48x |
-| 8 | 220.3 | 68.78 | 4.09x | 1.59x |
+| 1 | 34.5 | 13.27 | 1.00x | 1.00x |
+| 4 | 97.7 | 37.47 | 2.83x | 2.82x |
+| 8 | 117.8 | 40.73 | 3.41x | 3.07x |
+
+Scaling of SmolLM2-135M-Instruct-Q8_0 (Q8_0), step 06e-gemm, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 383.4 | 141.13 | 1.00x | 1.00x |
+| 2 | 662.5 | 178.72 | 1.73x | 1.27x |
+| 4 | 1138.4 | 208.78 | 2.97x | 1.48x |
+| 8 | 1318.1 | 132.94 | 3.44x | 0.94x |
+
+Scaling of SmolLM2-135M-Instruct-f16 (F16), step 06e-gemm, relative to 1 thread(s):
+
+| Threads | Prefill tok/s | Decode tok/s | Prefill speedup | Decode speedup |
+|---|---|---|---|---|
+| 1 | 165.1 | 50.81 | 1.00x | 1.00x |
+| 2 | 300.5 | 91.69 | 1.82x | 1.80x |
+| 4 | 482.2 | 136.16 | 2.92x | 2.68x |
+| 8 | 644.3 | 95.85 | 3.90x | 1.89x |
 
 What the tables show. On Llama 3.2 1B the NEON table took decode from 1.9 to 12.4 tokens per second on one thread and to 33 on eight, reaching 37 percent of the machine's bandwidth. Most of that step came from one kernel: the file stores its tied output matrix as Q6_K, which alone cost 392 of the 433 ms per token on the scalar path. On SmolLM2 the picture is different: a 135M model's matmuls are microseconds of work, so decode stops scaling past two threads and the per-launch overhead sets the ceiling. Prefill, with many rows per launch, scales to eight threads on every model.
 
@@ -288,6 +299,8 @@ The fused step went after that ceiling from two sides. The q, k and v projection
 The `06d-f16cache` rows are the same build with `--cache f16` at eight threads. Decode moved from 98.5 to 116.3 tokens per second on SmolLM2 Q8_0, from 68.8 to 73.2 on SmolLM2 F16 and from 33.4 to 38.1 on Llama 3.2 1B, with the cache bytes read per token halved. Eight-thread runs on this machine vary more between sittings than the other thread counts, so the direction is the result and the exact gap is not.
 
 A software prefetch of the weight rows ahead of the NEON Q8_0 and Q4_0 kernels was tried at three distances and removed. Every distance slowed the Q8_0 row by 4 to 13 percent, and the one Q4_0 gain was equal to that run's own spread. The hardware prefetcher already follows the four sequential row streams.
+
+The `06e-gemm` step is prefill and attention. Prefill used to run the single-row matmul once per prompt row, so every weight block was unpacked once per row. It now calls multi-row kernels that on the NEON table are register tiles: a weight block is loaded and unpacked once and applied to four or eight activation rows, each row keeping the single-row kernel's accumulators and fused multiply-add order, so the tiles are bit-identical to the old path row by row and every locked identity held without a tolerance change. The second half of the step is a NEON kernel for the F32 attention, which had been the scalar reference in both tables and was the largest slot on SmolLM2 in both passes, and a split of the attention launch into head by row-group items so a prompt spreads over more items than there are heads. Prefill on Llama 3.2 1B went from 13.5 to 34.5 tokens per second on one thread and from 47.9 to 117.8 on eight, on SmolLM2 Q8_0 from 548 to 1138 on four threads, and on SmolLM2 F16 from 53.9 to 165 on one. Decode moved where attention was the cost: SmolLM2 Q8_0 from 156 to 209 tokens per second on four threads, Llama 3.2 1B from 33.4 to 40.7 on eight. The profile of a Llama 3.2 1B prompt token on eight threads now reads 49 percent in the Q6_K output matrix, 21 in gate and up, 15 in down and 6 in attention. The tile heights were chosen by measurement, 4 rows for F32 and Q6_K and 8 for F16, Q8_0 and Q4_0, where more rows spill registers.
 
 Kernel rows, one thread, scalar against NEON on the same shapes:
 
@@ -298,8 +311,32 @@ Kernel rows, one thread, scalar against NEON on the same shapes:
 | Q8_0 matmul, Q8_0 activations | 2048 x 2048 | 18.7 | 81.3 | 10.0 | 43.2 |
 | Q4_0 matmul, Q8_0 activations | 2048 x 2048 | 15.1 | 63.1 | 4.3 | 17.8 |
 | Q6_K matmul, float activations | 2048 x 2048 | 1.4 | 14.7 | 0.6 | 6.0 |
+| Attention, 9 heads over 3 kv heads of 64, 512 positions, one query row | | 7.9 | 18.4 | | |
+
+Multi-row rows, 32 activation rows against the same weights, the shape a prefill chunk presents. The "per row" column is the single-row NEON kernel called once per row, which is what prefill did before the tiles:
+
+| Kernel | Shape (rows x out x in) | Scalar GFLOP/s | NEON per row GFLOP/s | NEON tile GFLOP/s |
+|---|---|---|---|---|
+| F32 matmul | 32 x 2048 x 2048 | 2.2 | 22 | 44 |
+| F16 matmul | 32 x 2048 x 2048 | 1.1 | 14 | 52 |
+| Q8_0 matmul, Q8_0 activations | 32 x 2048 x 2048 | 18.5 | 81 | 188 |
+| Q4_0 matmul, Q8_0 activations | 32 x 2048 x 2048 | 15.1 | 63 | 170 |
+| Q6_K matmul, float activations | 32 x 2048 x 2048 | 1.4 | 15 | 38 |
 
 The scalar integer rows are already auto-vectorized by the compiler, which is why the NEON gain there is four times rather than ten. The integer kernels keep the scalar kernel's per-block accumulation order and are bit-identical to it, which is a locked test. The float kernels differ by reduction order within 8e-7, measured first and locked at four times the measurement.
+
+### Against llama.cpp
+
+`scripts/compare_llamacpp.sh` builds llama.cpp at a pinned commit, CPU only, and runs `llama-bench -p 512 -n 128 -r 5` on the same files, which is the engine's prompt length, generation length and repetition count. The rows go into `bench/results/` with the step `llamacpp` and the table below is rendered from them next to the engine's latest step. Two differences are stated rather than adjusted for: `tg128` generates from an empty context while the engine decodes after the 512-token prompt, so the engine's decode carries the attention over those positions, and llama.cpp repacks Q4_0 weights into its interleaved arm64 layout at load, a different kernel family from a plain Q4_0 dot product. llama.cpp also defaults to an fp16 cache, where these engine rows use the F32 cache.
+
+| Model | Threads | Engine step | Prefill tok/s (engine) | Prefill tok/s (llama.cpp) | Share | Decode tok/s (engine) | Decode tok/s (llama.cpp) | Share |
+|---|---|---|---|---|---|---|---|---|
+| Llama-3.2-1B-Instruct-Q4_0 | 4 | 06e-gemm | 97.7 | 336.5 | 29% | 37.47 | 67.20 | 56% |
+| Llama-3.2-1B-Instruct-Q4_0 | 8 | 06e-gemm | 117.8 | 347.6 | 34% | 40.73 | 48.29 | 84% |
+| SmolLM2-135M-Instruct-Q8_0 | 4 | 06e-gemm | 1138.4 | 1853.9 | 61% | 208.78 | 317.83 | 66% |
+| SmolLM2-135M-Instruct-Q8_0 | 8 | 06e-gemm | 1318.1 | 1721.6 | 77% | 132.94 | 179.27 | 74% |
+
+On Llama 3.2 1B Q4_0 at eight threads the engine decodes at 84 percent of llama.cpp and prefills at 34 percent, under the 40 percent this step set itself. The profile says where: half of a prompt token is the tied Q6_K output matrix, which the engine dequantizes to float and dots at 38 GFLOP/s per core, where llama.cpp quantizes the activations to 8-bit blocks and runs that matrix on integer dot products like the Q4_0 and Q8_0 paths here. The next lever is that integer activation path for Q6_K, a numerics change that gets its own Hugging Face gates. The rest of the gap is the Q4_0 tiles against llama.cpp's repacked layout. On the small model the engine is within a third of llama.cpp on both passes at four threads, and closer at eight because llama.cpp loses more there.
 
 ### Quantization accuracy
 
@@ -308,8 +345,10 @@ Measured on SmolLM2-135M-Instruct against its F16 file, over the ten prompt fixt
 | File | Argmax agreement with F16 | Perplexity (engine) | Perplexity (Hugging Face, dequantized) | Delta from F16 |
 |---|---|---|---|---|
 | F16 | | 17.652 | 17.652 | |
-| Q8_0 | 95.2% | 17.710 | 17.665 | +0.06 |
-| Q4_0 | 77.9% | 20.185 | 20.194 | +2.53 |
+| Q8_0 | 97.2% | 17.677 | 17.665 | +0.03 |
+| Q4_0 | 80.0% | 20.226 | 20.194 | +2.57 |
+
+These are the default NEON table's numbers. The scalar table gives 95.2 percent and 17.710 for Q8_0 and 77.9 percent and 20.185 for Q4_0, and the F16 file gives 17.652 on both. The gap between the tables is the NEON attention's reduction order, a perturbation of about one part in ten million that the Q8_0 activation quantization in front of the next matmul turns into a different rounding of a few activations per layer. Neither table is more right than the other, and both sit within the locked tolerance of the Hugging Face reference.
 
 A 135M model loses a lot to Q4_0. That is a property of the model and the format, reproduced by Hugging Face on the same weights, not of the engine. Larger models lose far less, and the perplexity tool makes the trade-off measurable for any file.
 
@@ -365,12 +404,27 @@ The fp16 cache is a different kind of trade. On the F16 file it leaves every arg
 | m1-06d-fused-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
 | m1-06d-fused-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
 | m1-06d-fused-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | 4a9a4a2252ad | 2026-10-11 | f535f83ec568 |
+| m1-06e-gemm-Llama-3.2-1B-Instruct-Q4_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | fa0390e7c043 |
+| m1-06e-gemm-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | fa0390e7c043 |
+| m1-06e-gemm-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | fa0390e7c043 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-Q8_0-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | 5a1395716f79 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-Q8_0-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | 5a1395716f79 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | 5a1395716f79 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | 5a1395716f79 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-f16-t1 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
+| m1-06e-gemm-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
+| m1-llamacpp-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | fa0390e7c043 |
+| m1-llamacpp-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | fa0390e7c043 |
+| m1-llamacpp-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | 5a1395716f79 |
+| m1-llamacpp-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | 5a1395716f79 |
 
 ## Design notes
 
 ### Kernels
 
-Two tables implement the same interface. The scalar table is the reference, plain loops written to be read, and the NEON table overrides the matmuls and activation quantization with intrinsics compiled only into those files, with the dot product and half-precision extensions enabled there alone. The table is chosen at load from the CPU's reported features and can be forced to scalar on any command. RMSNorm, SiLU and softmax stay scalar on purpose: they are under one part in a thousand of a token's arithmetic, and keeping them scalar is what keeps the quantized models bit-identical across tables.
+Two tables implement the same interface. The scalar table is the reference, plain loops written to be read, and the NEON table overrides the matmuls, the activation quantization and the attention with intrinsics compiled only into those files, with the dot product and half-precision extensions enabled there alone. Prefill calls the multi-row entries, which on the NEON table are register tiles: each weight block is loaded, and for the quantized formats unpacked, once per four or eight activation rows, while every row keeps the accumulators and the fused multiply-add order of the single-row kernel, so a row's result does not depend on how many rows share the call. That is what keeps cached decoding bit-identical to the cache-free forward on both tables. The table is chosen at load from the CPU's reported features and can be forced to scalar on any command. RMSNorm, SiLU and softmax stay scalar on purpose: they are under one part in a thousand of a token's arithmetic, and keeping them scalar is what keeps the quantized models bit-identical across tables.
 
 Every operation the forward pass needs lives behind one table of function pointers: matmul for F32, F16 and BF16 weights (single vector and multi-row), RMSNorm, RoPE (adjacent-pair and NeoX layouts, with the Llama 3.x per-dimension frequency factors), softmax, SwiGLU, embedding lookup and causal attention with grouped-query heads, over a whole sequence or over a cache. The scalar implementations under `src/kernels/ref/` are the reference: plain loops, sequential float accumulation, written to be read. Optimized tables slot in without touching any call site and are tested against the scalar one.
 
@@ -425,7 +479,7 @@ Fixtures under `tests/reference/fixtures/` are generated by the Python scripts n
 - Kernel fixtures are `.axt` tensors (a 4-byte magic, dims, dtype, raw data) written by NumPy in float64.
 - Model fixtures are a NumPy forward over the synthetic model, and for SmolLM2 the Hugging Face argmax per position, last-position logits and greedy continuations. The full per-position logits stay in the gitignored `tests/reference/local/` and are checked when `AXON_LOCAL_FIXTURES` points there.
 - Chat template fixtures are the Hugging Face `apply_chat_template` output for three conversations per family, produced from the tokenizers alone.
-- Benchmark results under `bench/results/` are written by `bench/bench_e2e.sh` and never edited. `bench/render_tables.py` renders them, and `--self-test` checks the renderer in the check script.
+- Benchmark results under `bench/results/` are written by `bench/bench_e2e.sh` and never edited. The `llamacpp` rows come from `scripts/compare_llamacpp.sh`, which builds llama.cpp at the commit the script pins and runs `llama-bench` with the same prompt and generation lengths. `bench/render_tables.py` renders them, and `--self-test` checks the renderer in the check script.
 - Quantization fixtures are rows and small matrices quantized by the `gguf` package, with its dequantized values alongside.
 - The perplexity text is the head of the WikiText-2 raw test split (Merity et al., "Pointer Sentinel Mixture Models", 2016, CC BY-SA 3.0), written by `scripts/make_perplexity_fixture.py`, with Hugging Face reference numbers for the SmolLM2 files from `tests/reference/gen_perplexity_reference.py`.
 
