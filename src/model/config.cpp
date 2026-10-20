@@ -4,6 +4,8 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+
 namespace axon::model {
 
 namespace {
@@ -129,7 +131,8 @@ std::string LlamaConfig::describe() const {
 }
 
 std::size_t LlamaConfig::activation_bytes(std::size_t max_seq, std::size_t max_ctx,
-                                          std::size_t n_threads, CacheType cache) const {
+                                          std::size_t n_threads, CacheType cache,
+                                          std::size_t max_batch) const {
   // The cache-free pass stages k and v and its scores span the prompt. With a cache the scores
   // span the context, and the F16 cache also stages k and v in float before rounding them in,
   // where the F32 cache writes them straight into its rows.
@@ -137,7 +140,11 @@ std::size_t LlamaConfig::activation_bytes(std::size_t max_seq, std::size_t max_c
   allocate_activations(uncached, *this, max_seq, max_seq, true, n_threads);
   SizeCounter cached;
   allocate_activations(cached, *this, max_seq, max_ctx, cache == CacheType::F16, n_threads);
-  return uncached.total > cached.total ? uncached.total : cached.total;
+  // A batched decode step stages the new keys and values of max_batch rows and attends over
+  // the longest of its caches.
+  SizeCounter batched;
+  allocate_activations(batched, *this, max_batch, max_ctx, true, n_threads);
+  return std::max({uncached.total, cached.total, batched.total});
 }
 
 }  // namespace axon::model

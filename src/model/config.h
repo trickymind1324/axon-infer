@@ -48,7 +48,8 @@ struct LlamaConfig {
   // in float before rounding them, so a model sized for one type runs only that type.
   [[nodiscard]] std::size_t activation_bytes(std::size_t max_seq, std::size_t max_ctx,
                                              std::size_t n_threads = 1,
-                                             CacheType cache = CacheType::F32) const;
+                                             CacheType cache = CacheType::F32,
+                                             std::size_t max_batch = 1) const;
 
   [[nodiscard]] std::uint32_t n_embd_kv() const { return n_head_kv * head_dim; }
   [[nodiscard]] std::uint32_t n_embd_q() const { return n_head * head_dim; }

@@ -35,6 +35,8 @@ struct LoadOptions {
   kernels::KernelSet kernels = kernels::KernelSet::Auto;
   // Microseconds an idle worker thread spins before sleeping, see ThreadPoolOptions.
   int spin_budget_us = ThreadPoolOptions::kDefaultSpinBudgetUs;
+  // Sequences a batched decode step may carry (forward_batch). The arena is sized for it.
+  std::size_t max_batch = 1;
   // Key/value cache storage. F32 keeps cached decoding bit-identical to the cache-free pass.
   // F16 halves the cache and rounds each key and value once when it is written.
   CacheType cache = CacheType::F32;
@@ -99,10 +101,18 @@ public:
                                                    const ForwardOptions& opts = {});
   // One token at position cache.pos(). Logits are [1][n_vocab].
   Expected<std::span<const float>> forward_one(KVCache& cache, std::int32_t token);
+  // One decode step for several independent sequences: tokens[i] is appended at
+  // caches[i]->pos() and the logits come back as [tokens.size()][n_vocab]. Each row is computed
+  // exactly as forward_one would compute it alone, so the result is bit-identical to decoding
+  // the sequences one at a time. At most max_batch sequences, every cache this model's.
+  Expected<std::span<const float>> forward_batch(std::span<KVCache* const> caches,
+                                                 std::span<const std::int32_t> tokens,
+                                                 const ForwardOptions& opts = {});
 
   // A cache sized for this model's max_ctx.
   [[nodiscard]] KVCache new_cache() const { return KVCache(cfg_, max_ctx_, cache_type_); }
   [[nodiscard]] CacheType cache_type() const noexcept { return cache_type_; }
+  [[nodiscard]] std::size_t max_batch() const noexcept { return max_batch_; }
 
   [[nodiscard]] const LlamaConfig& config() const noexcept { return cfg_; }
   [[nodiscard]] const LlamaWeights& weights() const noexcept { return weights_; }
@@ -124,7 +134,8 @@ private:
   LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer> tokenizer,
              LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table);
   Expected<std::span<const float>> run(std::span<const std::int32_t> tokens, KVCache* cache,
-                                       const ForwardOptions& opts);
+                                       const ForwardOptions& opts,
+                                       std::span<KVCache* const> batch = {});
 
   GGUFFile file_;  // owns the mapping every weight points into; declared first, destroyed last
   LlamaConfig cfg_;
@@ -133,6 +144,7 @@ private:
   std::size_t max_seq_;
   std::size_t max_ctx_;
   CacheType cache_type_;
+  std::size_t max_batch_;
   bool exact_activations_;
   const kernels::KernelTable* kernels_;
   ThreadPool pool_;

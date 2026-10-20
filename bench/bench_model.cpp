@@ -84,6 +84,47 @@ void bm_decode(benchmark::State& state, const std::string& path) {
   state.counters["cache_MB"] = static_cast<double>(cache.live_bytes()) / (1024.0 * 1024.0);
 }
 
+// One batched decode step over `batch` sequences at the same context, against the single
+// step above: the weight pass is shared, the attention is per sequence. Args are {context, batch}.
+void bm_decode_batch(benchmark::State& state, const std::string& path) {
+  const auto context = static_cast<std::size_t>(state.range(0));
+  const auto batch = static_cast<std::size_t>(state.range(1));
+  const std::size_t chunk = std::min<std::size_t>(64, context);
+  auto model = axon::model::LlamaModel::load(
+      path, {.max_seq = chunk, .max_ctx = context, .max_batch = batch});
+  if (!model) {
+    state.SkipWithError(model.error().message);
+    return;
+  }
+  const auto tokens = filler(context, static_cast<std::int32_t>((*model)->config().n_vocab));
+  std::vector<axon::model::KVCache> caches;
+  caches.reserve(batch);
+  std::vector<axon::model::KVCache*> ptrs;
+  for (std::size_t b = 0; b < batch; ++b) {
+    caches.push_back((*model)->new_cache());
+    for (std::size_t offset = 0; offset + 1 < context; offset += chunk) {
+      const std::size_t n = std::min(chunk, context - 1 - offset);
+      const auto logits =
+          (*model)->forward_prefill(caches.back(), std::span(tokens).subspan(offset, n));
+      if (!logits) {
+        state.SkipWithError(logits.error().message);
+        return;
+      }
+    }
+    ptrs.push_back(&caches.back());
+  }
+  const std::size_t filled = caches.front().pos();
+  const std::vector<std::int32_t> row(batch, tokens.back());
+  for (auto _ : state) {
+    for (auto& c : caches) {
+      c.truncate(filled);
+    }
+    const auto logits = (*model)->forward_batch(ptrs, row);
+    benchmark::DoNotOptimize(logits->data());
+  }
+  state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(batch));
+}
+
 constexpr const char* kSyntheticPath = AXON_FIXTURE_DIR "/gguf/synthetic-2l.gguf";
 
 std::string smollm2_path() {
@@ -101,6 +142,11 @@ const int kRegistered = [] {
       ->Arg(32)
       ->Arg(128)
       ->Unit(benchmark::kMillisecond);
+  benchmark::RegisterBenchmark("bm_decode_batch_synthetic", bm_decode_batch, synthetic)
+      ->Args({128, 1})
+      ->Args({128, 2})
+      ->Args({128, 4})
+      ->Args({128, 8});
   benchmark::RegisterBenchmark("bm_decode_synthetic", bm_decode, synthetic)
       ->Arg(32)
       ->Arg(128)

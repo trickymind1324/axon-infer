@@ -172,12 +172,13 @@ LlamaModel::LlamaModel(GGUFFile file, LlamaConfig cfg, std::unique_ptr<Tokenizer
                        LlamaWeights weights, LoadOptions options, const kernels::KernelTable* table)
     : file_(std::move(file)), cfg_(std::move(cfg)), tokenizer_(std::move(tokenizer)),
       weights_(std::move(weights)), max_seq_(options.max_seq), max_ctx_(options.max_ctx),
-      cache_type_(options.cache), exact_activations_(options.exact_activations), kernels_(table),
+      cache_type_(options.cache), max_batch_(std::max<std::size_t>(1, options.max_batch)),
+      exact_activations_(options.exact_activations), kernels_(table),
       pool_(ThreadPoolOptions{.n_threads = options.n_threads,
                               .spin_budget = std::chrono::microseconds(options.spin_budget_us)}),
       weight_bytes_(sum_weight_bytes(weights_, cfg_)),
       arena_(cfg_.activation_bytes(max_seq_, max_ctx_, static_cast<std::size_t>(pool_.size()),
-                                   cache_type_)) {}
+                                   cache_type_, max_batch_)) {}
 
 Expected<std::unique_ptr<LlamaModel>> LlamaModel::load(const std::filesystem::path& path,
                                                        LoadOptions options) {
@@ -262,6 +263,46 @@ Expected<std::span<const float>> LlamaModel::forward_one(KVCache& cache, std::in
   return run(std::span<const std::int32_t>(&token, 1), &cache, ForwardOptions{});
 }
 
+Expected<std::span<const float>> LlamaModel::forward_batch(std::span<KVCache* const> caches,
+                                                           std::span<const std::int32_t> tokens,
+                                                           const ForwardOptions& opts) {
+  if (caches.empty() || caches.size() != tokens.size()) {
+    return make_error(
+        ErrorCode::InvalidArgument,
+        fmt::format("forward_batch: {} caches for {} tokens", caches.size(), tokens.size()));
+  }
+  if (caches.size() > max_batch_) {
+    return make_error(
+        ErrorCode::InvalidArgument,
+        fmt::format("forward_batch: {} sequences exceed max_batch {}", caches.size(), max_batch_));
+  }
+  for (std::size_t i = 0; i < caches.size(); ++i) {
+    const KVCache* cache = caches[i];
+    if (cache == nullptr || !cache->matches(cfg_)) {
+      return make_error(ErrorCode::InvalidArgument,
+                        fmt::format("forward_batch: cache {} was built for a different model", i));
+    }
+    if (cache->type() != cache_type_) {
+      return make_error(ErrorCode::InvalidArgument,
+                        fmt::format("forward_batch: cache {} has a different type from the one "
+                                    "the model was loaded with",
+                                    i));
+    }
+    if (cache->pos() >= cache->max_ctx()) {
+      return make_error(ErrorCode::InvalidArgument,
+                        fmt::format("context overflow: cache {} holds {} of {} positions", i,
+                                    cache->pos(), cache->max_ctx()));
+    }
+    for (std::size_t j = 0; j < i; ++j) {
+      if (caches[j] == cache) {
+        return make_error(ErrorCode::InvalidArgument,
+                          fmt::format("forward_batch: cache {} appears twice", i));
+      }
+    }
+  }
+  return run(tokens, nullptr, opts, caches);
+}
+
 // The one forward pass. Without a cache, keys and values live in the arena and the attention
 // spans the new tokens only. With a cache, new keys and values are written straight into the
 // cache rows after the ones already there, and the attention spans the whole cache.
@@ -272,7 +313,12 @@ Expected<std::span<const float>> LlamaModel::forward_one(KVCache& cache, std::in
 // M1's efficiency cores are a few times slower than its performance cores and a static split
 // makes every launch wait for the slowest share.
 Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> tokens,
-                                                 KVCache* cache, const ForwardOptions& opts) {
+                                                 KVCache* cache, const ForwardOptions& opts,
+                                                 std::span<KVCache* const> batch) {
+  // Batched: every row is its own sequence with its own cache and position, validated by
+  // forward_batch. The rows share the matmuls like a prefill chunk does and part ways only
+  // where a position or a cache is read or written.
+  const bool batched = !batch.empty();
   const std::size_t seq = tokens.size();
   if (seq == 0) {
     return make_error(ErrorCode::InvalidArgument, "forward: empty token sequence");
@@ -311,7 +357,14 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   const std::size_t n_head = cfg_.n_head;
   const std::size_t n_head_kv = cfg_.n_head_kv;
   const std::size_t kv_row = cfg_.n_embd_kv();
-  const std::size_t total = n_past + seq;
+  const auto pos_of = [&](std::size_t i) { return batched ? batch[i]->pos() : n_past + i; };
+  std::size_t total = n_past + seq;
+  if (batched) {
+    total = 0;
+    for (const KVCache* c : batch) {
+      total = std::max(total, c->pos() + 1);
+    }
+  }
   const bool dumping = opts.dump_layer != ForwardOptions::kNoDump;
   const auto n_threads = static_cast<std::size_t>(pool_.size());
   const kernels::RopeParams rope{
@@ -325,7 +378,8 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
 
   // An fp16 cache needs float staging rows for the new keys and values, like the cache-free
   // pass, before they are rounded into the cache.
-  const bool half_cache = cache != nullptr && cache->type() == CacheType::F16;
+  const bool half_cache = (cache != nullptr && cache->type() == CacheType::F16) ||
+                          (batched && cache_type_ == CacheType::F16);
   arena_.reset();
   Activations a =
       allocate_activations(arena_, cfg_, seq, total, cache == nullptr || half_cache, n_threads);
@@ -456,14 +510,51 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
       add_bias(v_new, *w.bv, seq);
     }
     for (std::size_t i = 0; i < seq; ++i) {
-      k.rope(a.q.data() + i * n_head * head_dim, n_head, n_past + i, rope);
-      k.rope(k_new + i * kv_row, n_head_kv, n_past + i, rope);
+      k.rope(a.q.data() + i * n_head * head_dim, n_head, pos_of(i), rope);
+      k.rope(k_new + i * kv_row, n_head_kv, pos_of(i), rope);
     }
     AXON_DUMP(dump_this, "q", a.q);
     AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
     AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
     tick(ForwardProfile::kOther);
-    if (half_cache) {
+    if (batched) {
+      // Each row's key and value go to its own cache at its own position, then every
+      // (sequence, head) pair is one work item over that sequence's cache.
+      for (std::size_t i = 0; i < seq; ++i) {
+        KVCache* c = batch[i];
+        const std::size_t at = c->pos() * kv_row;
+        if (half_cache) {
+          std::uint16_t* k16 = c->k16(l) + at;
+          std::uint16_t* v16 = c->v16(l) + at;
+          for (std::size_t j = 0; j < kv_row; ++j) {
+            k16[j] = fp32_to_fp16(k_new[i * kv_row + j]);
+            v16[j] = fp32_to_fp16(v_new[i * kv_row + j]);
+          }
+        } else {
+          std::copy_n(k_new + i * kv_row, kv_row, c->k(l) + at);
+          std::copy_n(v_new + i * kv_row, kv_row, c->v(l) + at);
+        }
+      }
+      tick(ForwardProfile::kOther);
+      const std::size_t q_row = n_head * head_dim;
+      pool_.parallel_for(0, seq * n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
+        float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
+        for (std::size_t item = begin; item < end; ++item) {
+          const std::size_t b = item / n_head;
+          const std::size_t h = item % n_head;
+          KVCache* c = batch[b];
+          if (half_cache) {
+            k.attention_kv_heads_f16(a.q.data() + b * q_row, c->k16(l), c->v16(l),
+                                     a.attn.data() + b * q_row, scores, 1, c->pos(), n_head,
+                                     n_head_kv, head_dim, scale, h, h + 1);
+          } else {
+            k.attention_kv_heads(a.q.data() + b * q_row, c->k(l), c->v(l),
+                                 a.attn.data() + b * q_row, scores, 1, c->pos(), n_head, n_head_kv,
+                                 head_dim, scale, h, h + 1);
+          }
+        }
+      });
+    } else if (half_cache) {
       std::uint16_t* k16 = cache->k16(l) + n_past * kv_row;
       std::uint16_t* v16 = cache->v16(l) + n_past * kv_row;
       for (std::size_t i = 0; i < seq * kv_row; ++i) {
@@ -472,7 +563,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
       }
       tick(ForwardProfile::kOther);
     }
-    {
+    if (!batched) {
       // One work item per head and group of query rows, so a prompt spreads over more items
       // than there are heads. Each item is a plain call on its rows: the row offset moves the
       // query and output pointers and the past length, and a thread's score scratch, sized for
@@ -540,6 +631,9 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   tick(ForwardProfile::kOther);
   if (cache != nullptr) {
     cache->advance(seq);
+  }
+  for (KVCache* c : batch) {
+    c->advance(1);
   }
   return std::span<const float>(a.logits);
 }
