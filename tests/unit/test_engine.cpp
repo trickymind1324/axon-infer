@@ -6,6 +6,7 @@
 #include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -215,4 +216,34 @@ TEST_CASE("seeded sampling is reproducible through the engine", "[engine]") {
   opts.sampler.seed = 4321;
   axon::engine::Engine c(*model);
   CHECK(run(c, prompt, opts) != from_a);
+}
+
+TEST_CASE("a set cancel flag ends generation after the token in flight", "[engine]") {
+  auto model = load_synthetic();
+  axon::engine::Engine engine(*model);
+  const std::vector<std::int32_t> prompt{1, 2, 3, 4};
+  std::atomic<bool> cancel{false};
+  auto opts = greedy(12);
+  opts.stop_on_tokens = false;
+  opts.cancel = &cancel;
+  std::size_t pieces = 0;
+  const auto out = engine.generate(prompt, opts, [&](std::string_view) {
+    if (++pieces == 3) {
+      cancel.store(true);
+    }
+  });
+  REQUIRE(out);
+  // The third piece set the flag, so the loop stops before feeding another token: at most one
+  // more token than the pieces seen, since a token may decode to no text yet.
+  CHECK(out->size() >= 3);
+  CHECK(out->size() <= pieces + 1);
+  CHECK(engine.stats().cancelled);
+  CHECK_FALSE(engine.stats().context_full);
+
+  // Without the flag the same run goes to max_tokens.
+  engine.clear();
+  opts.cancel = nullptr;
+  const auto full = run(engine, prompt, opts);
+  CHECK(full.size() == 12);
+  CHECK_FALSE(engine.stats().cancelled);
 }

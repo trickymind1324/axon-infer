@@ -7,6 +7,7 @@
 #include <sys/resource.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <utility>
 
@@ -130,6 +131,10 @@ Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& op
     }
     if (cache_.pos() >= cache_.max_ctx()) {
       stats_.context_full = true;
+      break;
+    }
+    if (opts.cancel != nullptr && opts.cancel->load(std::memory_order_relaxed)) {
+      stats_.cancelled = true;
       break;
     }
     // history_ tracks the cache exactly: a token joins it only when it is fed.

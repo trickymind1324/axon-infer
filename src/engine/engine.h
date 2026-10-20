@@ -9,6 +9,7 @@
 #include "model/kv_cache.h"
 #include "model/llama.h"
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -26,6 +27,9 @@ struct GenerateOptions {
   std::span<const std::int32_t> stop_tokens;
   // False ignores stop tokens entirely and always produces max_tokens, for benchmarks.
   bool stop_on_tokens = true;
+  // Checked before every decode step. Set from another thread to end generation after the
+  // token in flight, which is how a server stops a request whose client has gone.
+  const std::atomic<bool>* cancel = nullptr;
 };
 
 struct Stats {
@@ -42,6 +46,7 @@ struct Stats {
   std::uint64_t seed = 0;
   bool stopped_on_token = false;  // a stop token ended generation
   bool context_full = false;      // the cache filled up before max_tokens
+  bool cancelled = false;         // the cancel flag ended generation
   [[nodiscard]] double prefill_tok_s() const;
   [[nodiscard]] double decode_tok_s() const;
 };

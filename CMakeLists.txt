@@ -18,6 +18,7 @@ endif()
 
 option(AXON_BUILD_TESTS "Build unit tests" ON)
 option(AXON_BUILD_BENCH "Build benchmarks" ON)
+option(AXON_BUILD_SERVER "Build the HTTP server" ON)
 option(AXON_NATIVE "Compile with -march=native (local peak numbers only)" OFF)
 option(AXON_COVERAGE "Enable source-based coverage (clang only)" OFF)
 option(AXON_CLANG_TIDY "Run clang-tidy on project targets" OFF)

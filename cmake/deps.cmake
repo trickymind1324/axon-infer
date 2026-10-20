@@ -24,6 +24,33 @@ set(CLI11_INSTALL OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(fmt CLI11)
 
+if(AXON_BUILD_SERVER)
+  # The HTTP server's two libraries, both header-only, the only non-ML dependencies the design
+  # record allows beyond the four above.
+  FetchContent_Declare(
+    httplib
+    GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
+    GIT_TAG v0.62.0
+    GIT_SHALLOW TRUE)
+  set(HTTPLIB_COMPILE OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_REQUIRE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_REQUIRE_ZLIB OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_REQUIRE_BROTLI OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+  set(HTTPLIB_INSTALL OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.12.0
+    GIT_SHALLOW TRUE)
+  set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+  set(JSON_Install OFF CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(httplib nlohmann_json)
+endif()
+
 if(AXON_BUILD_TESTS)
   FetchContent_Declare(
     Catch2
