@@ -135,6 +135,13 @@ void matmul_q6_k_rows(const BlockQ6_K* w, const float* x, float* y, std::size_t 
       dot_q6_k_tile<kRowTile>(w + o * nb, x + r * n_in, n_in, nb, y + r * y_stride + o, y_stride);
     }
   }
+  // Two leftover rows still share the unpack.
+  if (r + 2 <= n_rows) {
+    for (std::size_t o = 0; o < n_out; ++o) {
+      dot_q6_k_tile<2>(w + o * nb, x + r * n_in, n_in, nb, y + r * y_stride + o, y_stride);
+    }
+    r += 2;
+  }
   for (; r < n_rows; ++r) {
     for (std::size_t o = 0; o < n_out; ++o) {
       dot_q6_k_tile<1>(w + o * nb, x + r * n_in, 0, nb, y + r * y_stride + o, 0);

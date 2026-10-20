@@ -61,6 +61,79 @@ void check_rows(const std::string& name, std::size_t n_rows, std::size_t n_out, 
 
 }  // namespace
 
+TEST_CASE("every row count up to a tile and one more equals the single-row kernel row by row",
+          "[kernels][neon][rows]") {
+  // The tails of the tiled kernels descend through smaller tiles, so each row count takes a
+  // different path: two, three, six and seven rows on the eight-row tiles, three on the
+  // four-row ones.
+  const auto selected = axon::kernels::select(axon::kernels::KernelSet::Neon);
+  if (!selected) {
+    SKIP("no NEON table on this host");
+  }
+  const auto& k = **selected;
+  const std::size_t n_in = 256;
+  const std::size_t n_out = 5;
+  for (std::size_t n_rows = 1; n_rows <= 9; ++n_rows) {
+    const auto x = random_floats(n_rows * n_in, static_cast<std::uint32_t>(n_rows + 100), 2.0F);
+    const auto wf = random_floats(n_out * n_in, static_cast<std::uint32_t>(n_rows + 200), 0.5F);
+    std::vector<std::uint16_t> w16(wf.size());
+    for (std::size_t i = 0; i < wf.size(); ++i) {
+      w16[i] = axon::fp32_to_fp16(wf[i]);
+    }
+    std::vector<axon::BlockQ8_0> w8(n_out * n_in / 32);
+    k.quantize_row_q8_0(wf.data(), w8.data(), wf.size());
+    std::vector<axon::BlockQ8_0> xq(n_rows * n_in / 32);
+    for (std::size_t r = 0; r < n_rows; ++r) {
+      k.quantize_row_q8_0(x.data() + r * n_in, xq.data() + r * (n_in / 32), n_in);
+    }
+    std::mt19937 rng(static_cast<std::uint32_t>(n_rows + 300));
+    std::vector<axon::BlockQ4_0> w4(w8.size());
+    for (auto& block : w4) {
+      block.d = axon::fp32_to_fp16(0.02F);
+      for (auto& q : block.qs) {
+        q = static_cast<std::uint8_t>(rng() & 0xFF);
+      }
+    }
+    const auto w6 =
+        random_q6_k(n_out * n_in / axon::kQK_K, static_cast<std::uint32_t>(n_rows + 400));
+    const std::size_t nb = n_in / 32;
+    check_rows(
+        "f32", n_rows, n_out,
+        [&](float* y) { k.matmul_f32_rows(wf.data(), x.data(), y, n_rows, n_out, n_in, n_out); },
+        [&](std::size_t r, float* y) {
+          k.matmul_f32(wf.data(), x.data() + r * n_in, y, n_out, n_in);
+        });
+    check_rows(
+        "f16", n_rows, n_out,
+        [&](float* y) { k.matmul_f16_rows(w16.data(), x.data(), y, n_rows, n_out, n_in, n_out); },
+        [&](std::size_t r, float* y) {
+          k.matmul_f16(w16.data(), x.data() + r * n_in, y, n_out, n_in);
+        });
+    check_rows(
+        "q8_0 q8", n_rows, n_out,
+        [&](float* y) {
+          k.matmul_q8_0_q8_rows(w8.data(), xq.data(), y, n_rows, n_out, n_in, n_out);
+        },
+        [&](std::size_t r, float* y) {
+          k.matmul_q8_0_q8(w8.data(), xq.data() + r * nb, y, n_out, n_in);
+        });
+    check_rows(
+        "q4_0 q8", n_rows, n_out,
+        [&](float* y) {
+          k.matmul_q4_0_q8_rows(w4.data(), xq.data(), y, n_rows, n_out, n_in, n_out);
+        },
+        [&](std::size_t r, float* y) {
+          k.matmul_q4_0_q8(w4.data(), xq.data() + r * nb, y, n_out, n_in);
+        });
+    check_rows(
+        "q6_k", n_rows, n_out,
+        [&](float* y) { k.matmul_q6_k_rows(w6.data(), x.data(), y, n_rows, n_out, n_in, n_out); },
+        [&](std::size_t r, float* y) {
+          k.matmul_q6_k(w6.data(), x.data() + r * n_in, y, n_out, n_in);
+        });
+  }
+}
+
 TEST_CASE("tiled multi-row kernels equal the single-row kernel row by row",
           "[kernels][neon][rows]") {
   const auto selected = axon::kernels::select(axon::kernels::KernelSet::Neon);

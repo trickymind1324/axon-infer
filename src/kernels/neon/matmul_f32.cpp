@@ -151,6 +151,12 @@ void matmul_f32_rows(const float* w, const float* x, float* y, std::size_t n_row
       dot_f32_tile<kRowTileF32>(w + o * n_in, x + r * n_in, n_in, y + r * y_stride + o, y_stride);
     }
   }
+  if (r + 2 <= n_rows) {
+    for (std::size_t o = 0; o < n_out; ++o) {
+      dot_f32_tile<2>(w + o * n_in, x + r * n_in, n_in, y + r * y_stride + o, y_stride);
+    }
+    r += 2;
+  }
   for (; r < n_rows; ++r) {
     matmul_f32(w, x + r * n_in, y + r * y_stride, n_out, n_in);
   }
@@ -163,6 +169,19 @@ void matmul_f16_rows(const std::uint16_t* w, const float* x, float* y, std::size
     for (std::size_t o = 0; o < n_out; ++o) {
       dot_f16_tile<kRowTileF16>(w + o * n_in, x + r * n_in, n_in, y + r * y_stride + o, y_stride);
     }
+  }
+  // The tail descends through the smaller tiles, as the integer kernels do.
+  if (r + 4 <= n_rows) {
+    for (std::size_t o = 0; o < n_out; ++o) {
+      dot_f16_tile<4>(w + o * n_in, x + r * n_in, n_in, y + r * y_stride + o, y_stride);
+    }
+    r += 4;
+  }
+  if (r + 2 <= n_rows) {
+    for (std::size_t o = 0; o < n_out; ++o) {
+      dot_f16_tile<2>(w + o * n_in, x + r * n_in, n_in, y + r * y_stride + o, y_stride);
+    }
+    r += 2;
   }
   for (; r < n_rows; ++r) {
     matmul_f16(w, x + r * n_in, y + r * y_stride, n_out, n_in);

@@ -234,7 +234,17 @@ void matmul_rows_tiled(const Block* w, const BlockQ8_0* xq, float* y, std::size_
     for (; r + kRowTile <= n_rows; r += kRowTile) {
       tile4<kRowTile>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
     }
-    for (; r < n_rows; ++r) {
+    // The tail descends through the smaller tiles, so a batch of two or four rows still
+    // shares each weight load and unpack across its rows rather than paying one pass per row.
+    if (r + 4 <= n_rows) {
+      tile4<4>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
+      r += 4;
+    }
+    if (r + 2 <= n_rows) {
+      tile4<2>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
+      r += 2;
+    }
+    if (r < n_rows) {
       tile4<1>(w + o * nb, nb, xq + r * nb, y + r * y_stride + o, y_stride);
     }
   }
