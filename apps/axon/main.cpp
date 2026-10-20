@@ -433,6 +433,7 @@ struct BenchCli {
   int spin_budget_us = axon::ThreadPoolOptions::kDefaultSpinBudgetUs;
   bool force_scalar = false;
   std::string cache = "f32";
+  std::size_t batch = 1;
   bool json = false;
   bool profile = false;
 };
@@ -454,6 +455,7 @@ int run_bench(const BenchCli& opt) {
        .kernels =
            opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
        .spin_budget_us = opt.spin_budget_us,
+       .max_batch = std::max<std::size_t>(1, opt.batch),
        .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
   if (!loaded) {
     fmt::print(stderr, "error: {}\n", loaded.error().message);
@@ -471,16 +473,18 @@ int run_bench(const BenchCli& opt) {
     fmt::print("model: {} ({}), {} threads, {} kernels, context {}\n", model.file().model_name(),
                model.config().describe(), model.n_threads(), axon::kernels::name(model.table()),
                model.max_ctx());
-    fmt::print("prompt {} tokens, generate {}, {} runs after one warm-up\n", ids.size(),
-               opt.generate, opt.runs);
+    fmt::print("prompt {} tokens, generate {}, {} runs after one warm-up, batch of {}\n",
+               ids.size(), opt.generate, opt.runs, opt.batch);
   }
   const auto result = axon::engine::run_benchmark(
-      model, ids, {.generate = opt.generate, .runs = opt.runs},
+      model, ids, {.generate = opt.generate, .runs = opt.runs, .batch = opt.batch},
       [&](const axon::engine::BenchRun& run, int index) {
         if (!opt.json) {
+          const auto streams = static_cast<double>(opt.batch);
           fmt::print("run {}: prefill {:.2f} s ({:.2f} tok/s), decode {:.2f} s ({:.2f} tok/s)\n",
-                     index + 1, run.prefill_s, static_cast<double>(ids.size()) / run.prefill_s,
-                     run.decode_s, static_cast<double>(opt.generate) / run.decode_s);
+                     index + 1, run.prefill_s,
+                     streams * static_cast<double>(ids.size()) / run.prefill_s, run.decode_s,
+                     streams * static_cast<double>(opt.generate) / run.decode_s);
           std::fflush(stdout);
         }
       });
@@ -597,6 +601,9 @@ int run(int argc, char** argv) {
   be->add_option("--spin-budget-us", bench.spin_budget_us,
                  "microseconds an idle worker spins before sleeping")
       ->default_val(axon::ThreadPoolOptions::kDefaultSpinBudgetUs);
+  be->add_option("--batch", bench.batch,
+                 "copies of the prompt decoded together, the rates then count every stream")
+      ->default_val(1);
   be->add_flag("--json", bench.json, "print one JSON object");
   be->add_flag("--profile", bench.profile,
                "also print where prefill and one decode step spend their time, by launch kind");

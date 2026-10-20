@@ -1,11 +1,13 @@
 #include "engine/bench.h"
 
+#include "engine/batch.h"
 #include "engine/engine.h"
 #include "kernels/kernels.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <utility>
 #include <vector>
@@ -27,6 +29,65 @@ double median(std::vector<double> values) {
 
 }  // namespace
 
+namespace {
+
+// One batched run: `batch` copies of the prompt admitted together, prefilled one chunk per
+// step while the ones already in decode advance, then decoded as one batch until every
+// stream has its tokens. Prefill time ends when the last stream leaves prefill, decode time
+// runs from there to the end, so with a batch the two phases overlap by the chunks that the
+// earlier streams decoded during the later streams' prefill.
+Expected<BenchRun> run_batched(model::LlamaModel& model, std::span<const std::int32_t> prompt,
+                               const GenerateOptions& gen, std::size_t batch) {
+  BatchEngine engine(model, batch);
+  std::size_t finished = 0;
+  std::size_t short_streams = 0;
+  double peak_rss_mb = 0.0;
+  const auto expected = static_cast<std::size_t>(gen.max_tokens);
+  for (std::size_t i = 0; i < batch; ++i) {
+    const auto slot = engine.admit(prompt, gen, {}, [&](Finish, const Stats& s) {
+      ++finished;
+      short_streams += s.generated_tokens == expected ? 0 : 1;
+      peak_rss_mb = std::max(peak_rss_mb, s.peak_rss_mb);
+    });
+    if (!slot) {
+      return slot.error();
+    }
+    if (!slot->has_value()) {
+      return make_error(ErrorCode::Internal, "benchmark: no free slot for the batch");
+    }
+  }
+  const auto t_start = std::chrono::steady_clock::now();
+  auto t_decode = t_start;
+  bool prefilling = true;
+  while (engine.busy()) {
+    const auto step = engine.step();
+    if (!step) {
+      return step.error();
+    }
+    if (prefilling) {
+      bool any = false;
+      for (std::size_t i = 0; i < engine.slots(); ++i) {
+        any = any || engine.sequence(i).state() == Sequence::State::Prefill;
+      }
+      if (!any) {
+        prefilling = false;
+        t_decode = std::chrono::steady_clock::now();
+      }
+    }
+  }
+  const auto t_end = std::chrono::steady_clock::now();
+  if (finished != batch || short_streams != 0) {
+    return make_error(ErrorCode::Internal,
+                      fmt::format("benchmark: {} of {} streams finished, {} short of {} tokens",
+                                  finished, batch, short_streams, expected));
+  }
+  return BenchRun{.prefill_s = std::chrono::duration<double>(t_decode - t_start).count(),
+                  .decode_s = std::chrono::duration<double>(t_end - t_decode).count(),
+                  .peak_rss_mb = peak_rss_mb};
+}
+
+}  // namespace
+
 Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const std::int32_t> prompt,
                                     const BenchOptions& opts,
                                     const std::function<void(const BenchRun&, int)>& progress) {
@@ -44,9 +105,16 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
                                   "context of {}",
                                   prompt.size(), opts.generate, model.max_ctx()));
   }
+  if (opts.batch > model.max_batch()) {
+    return make_error(ErrorCode::InvalidArgument,
+                      fmt::format("benchmark: a batch of {} needs the model loaded for at least "
+                                  "that many, it was loaded for {}",
+                                  opts.batch, model.max_batch()));
+  }
   BenchResult result;
   result.prompt_tokens = prompt.size();
   result.generated_tokens = static_cast<std::size_t>(opts.generate);
+  result.batch = std::max<std::size_t>(1, opts.batch);
   result.threads = model.n_threads();
   result.kernels = std::string(kernels::name(model.table()));
   result.cache = model.cache_type() == model::CacheType::F16 ? "f16" : "f32";
@@ -61,22 +129,30 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
   gen.stop_on_tokens = false;
   Engine engine(model);
   for (int run = -1; run < opts.runs; ++run) {
-    engine.clear();  // a fresh cache every run, so prefill is always measured
-    auto out = engine.generate(prompt, gen, nullptr);
-    if (!out) {
-      return out.error();
-    }
-    const Stats& s = engine.stats();
-    if (std::cmp_not_equal(s.generated_tokens, opts.generate)) {
-      return make_error(ErrorCode::Internal,
-                        fmt::format("benchmark: generated {} tokens instead of {}",
-                                    s.generated_tokens, opts.generate));
+    BenchRun measured{};
+    if (result.batch == 1) {
+      engine.clear();  // a fresh cache every run, so prefill is always measured
+      auto out = engine.generate(prompt, gen, nullptr);
+      if (!out) {
+        return out.error();
+      }
+      const Stats& s = engine.stats();
+      if (std::cmp_not_equal(s.generated_tokens, opts.generate)) {
+        return make_error(ErrorCode::Internal,
+                          fmt::format("benchmark: generated {} tokens instead of {}",
+                                      s.generated_tokens, opts.generate));
+      }
+      measured = {.prefill_s = s.prefill_s, .decode_s = s.decode_s, .peak_rss_mb = s.peak_rss_mb};
+    } else {
+      auto batched = run_batched(model, prompt, gen, result.batch);
+      if (!batched) {
+        return batched.error();
+      }
+      measured = *batched;
     }
     if (run < 0) {
       continue;  // warm-up
     }
-    const BenchRun measured{
-        .prefill_s = s.prefill_s, .decode_s = s.decode_s, .peak_rss_mb = s.peak_rss_mb};
     result.runs.push_back(measured);
     if (progress) {
       progress(measured, run);
@@ -99,9 +175,10 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
 
   std::vector<double> prefill;
   std::vector<double> decode;
+  const auto streams = static_cast<double>(result.batch);
   for (const auto& r : result.runs) {
-    prefill.push_back(static_cast<double>(result.prompt_tokens) / r.prefill_s);
-    decode.push_back(static_cast<double>(result.generated_tokens) / r.decode_s);
+    prefill.push_back(streams * static_cast<double>(result.prompt_tokens) / r.prefill_s);
+    decode.push_back(streams * static_cast<double>(result.generated_tokens) / r.decode_s);
     result.peak_rss_mb = std::max(result.peak_rss_mb, r.peak_rss_mb);
   }
   result.prefill_tok_s_median = median(prefill);
@@ -115,8 +192,9 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
   const double element_bytes = model.cache_type() == model::CacheType::F16 ? 2.0 : 4.0;
   result.cache_bytes_per_token =
       2.0 * cfg.n_layer * static_cast<double>(cfg.n_embd_kv()) * element_bytes * mean_position;
-  result.weight_gb_s_median =
-      static_cast<double>(result.weight_bytes_per_token) * result.decode_tok_s_median / 1e9;
+  // One weight pass per decode step, whatever the batch, so the bandwidth follows the steps.
+  result.weight_gb_s_median = static_cast<double>(result.weight_bytes_per_token) *
+                              (result.decode_tok_s_median / streams) / 1e9;
   return result;
 }
 
@@ -210,8 +288,8 @@ std::string bench_json(const BenchResult& r, std::string_view model_file,
         i == 0 ? "" : ", ", r.runs[i].prefill_s, r.runs[i].decode_s, r.runs[i].peak_rss_mb);
   }
   return fmt::format(
-      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "cache": "{}", "threads": {}, "context": {}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
-      model_file, description, r.kernels, r.cache, r.threads, r.context, r.spin_budget_us,
+      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "cache": "{}", "threads": {}, "context": {}, "batch": {}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
+      model_file, description, r.kernels, r.cache, r.threads, r.context, r.batch, r.spin_budget_us,
       r.launches_per_token, r.prompt_tokens, r.generated_tokens, r.runs.size(),
       r.prefill_tok_s_median, r.prefill_tok_s_best, r.decode_tok_s_median, r.decode_tok_s_best,
       r.weight_bytes_per_token, r.cache_bytes_per_token, r.weight_gb_s_median, r.peak_rss_mb,

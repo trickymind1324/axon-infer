@@ -26,10 +26,16 @@ def quant_of(name: str) -> str:
     return "?"
 
 
+def batch_of(r) -> int:
+    return int(r.get("batch", 1))
+
+
 def end_to_end(records) -> str:
     lines = ["| Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |",
              "|---|---|---|---|---|---|---|"]
     for r in records:
+        if batch_of(r) != 1:
+            continue
         peak = r.get("peak_gb_s") or 0
         share = f"{100 * r['weight_gb_s'] / peak:.0f}%" if peak else "n/a"
         lines.append(f"| {r['step']} | {r['model']['file']} | {r['threads']} | "
@@ -38,8 +44,24 @@ def end_to_end(records) -> str:
     return "\n".join(lines)
 
 
+def batching(records) -> str:
+    """Aggregate decode throughput by batch size, next to the single-stream row of the same
+    step, model and thread count. Rates count every stream."""
+    lines = ["| Step | Model | Threads | Batch | Prefill tok/s | Decode tok/s | Per stream | Decode speedup |",
+             "|---|---|---|---|---|---|---|---|"]
+    rows = [r for r in records if batch_of(r) > 1]
+    for r in sorted(rows, key=lambda r: (r["step"], r["model"]["file"], r["threads"], batch_of(r))):
+        base = [b for b in records if batch_of(b) == 1 and b["step"] == r["step"]
+                and b["model"]["file"] == r["model"]["file"] and b["threads"] == r["threads"]]
+        decode = r["decode_tok_s"]["median"]
+        speedup = f"{decode / base[0]['decode_tok_s']['median']:.2f}x" if base else "n/a"
+        lines.append(f"| {r['step']} | {r['model']['file']} | {r['threads']} | {batch_of(r)} | "
+                     f"{r['prefill_tok_s']['median']:.1f} | {decode:.2f} | {decode / batch_of(r):.2f} | {speedup} |")
+    return "\n".join(lines)
+
+
 def scaling(records, model: str, step: str) -> str:
-    rows = [r for r in records if r["model"]["file"] == model and r["step"] == step]
+    rows = [r for r in records if r["model"]["file"] == model and r["step"] == step and batch_of(r) == 1]
     rows.sort(key=lambda r: r["threads"])
     if not rows:
         return ""
@@ -105,6 +127,13 @@ SAMPLE_LLAMACPP = {
     "model": {"file": "SmolLM2-135M-Instruct-Q8_0", "sha256": "0123456789abcdef"}, "threads": 2,
     "prefill_tok_s": {"median": 50.0, "best": 55.0}, "decode_tok_s": {"median": 12.5, "best": 13.0},
 }
+SAMPLE_BATCH = {
+    "step": "06a-threads", "date": "2026-10-03T10:00:00Z", "host": "m1", "cpu": "Apple M1", "commit": "abcdef123456",
+    "dirty": False, "peak_gb_s": 68.25, "model": {"file": "SmolLM2-135M-Instruct-Q8_0", "sha256": "0123456789abcdef"},
+    "threads": 2, "batch": 4, "prefill_tok_s": {"median": 60.0, "best": 61.0}, "decode_tok_s": {"median": 30.0, "best": 31.0},
+    "weight_gb_s": 0.25,
+}
+EXPECTED_BATCH_ROW = "| 06a-threads | SmolLM2-135M-Instruct-Q8_0 | 2 | 4 | 60.0 | 30.00 | 7.50 | 3.00x |"
 EXPECTED_COMPARISON_ROW = "| SmolLM2-135M-Instruct-Q8_0 | 2 | 06a-threads | 20.0 | 50.0 | 40% | 10.00 | 12.50 | 80% |"
 
 
@@ -116,6 +145,11 @@ def main() -> int:
         got = comparison(SAMPLE + [SAMPLE_LLAMACPP])
         assert EXPECTED_COMPARISON_ROW in got, got
         assert comparison(SAMPLE).count("\n") == 1, comparison(SAMPLE)
+        with_batch = SAMPLE + [SAMPLE_BATCH]
+        assert EXPECTED_BATCH_ROW in batching(with_batch), batching(with_batch)
+        assert EXPECTED_E2E_ROW in end_to_end(with_batch), end_to_end(with_batch)
+        assert "| 4 |" not in end_to_end(with_batch), end_to_end(with_batch)
+        assert scaling(with_batch, "SmolLM2-135M-Instruct-Q8_0", "06a-threads") == EXPECTED_SCALING
         print("render_tables self-test passed")
         return 0
     records = load(RESULTS.glob("*.json"))
@@ -130,6 +164,9 @@ def main() -> int:
             table = scaling(engine, model, step)
             if table.count("\n") > 4:
                 print("\n" + table)
+    if any(batch_of(r) > 1 for r in engine):
+        print("\n## Batching\n")
+        print(batching(engine))
     if any(r["step"] == "llamacpp" for r in records):
         print("\n## Against llama.cpp\n")
         print(comparison(records))
