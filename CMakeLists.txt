@@ -7,6 +7,9 @@ project(
   LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
+# No C++ modules anywhere, so the dependency scan that newer CMake runs for C++20 Ninja builds
+# is off: it needs clang-scan-deps, which minimal toolchains such as the Docker image lack.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

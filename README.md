@@ -24,7 +24,7 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on a 135M model is still paced by the cost of handing work to threads rather than by bandwidth, so small models decode fastest at four threads and lose speed at eight. K-quant formats other than Q6_K load and can be inspected but do not run. There is no HTTP server yet.
+**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on a 135M model is still paced by the cost of handing work to threads rather than by bandwidth, so small models decode fastest at four threads and lose speed at eight. K-quant formats other than Q6_K load and can be inspected but do not run. The HTTP server serves one request at a time from a bounded queue, with batching across requests still to come.
 
 ## Features
 
@@ -108,6 +108,48 @@ Germany also has its own capital city, Berlin. However, it's not the same as Par
 ```
 
 `/clear` starts a new conversation, `/stats` repeats the last turn's numbers, and `/exit` quits. Sampling is controlled with `--temp`, `--top-k`, `--top-p`, `--min-p`, `--repeat-penalty` and `--seed`. `--system` sets a system prompt, `--ctx` the cache length and `--threads` the thread count, which defaults to one per physical core. `--force-scalar` runs the scalar reference kernels for comparison. `--cache f16` stores keys and values in half precision, which halves the cache memory and the cache bytes read per token at a measured, locked cost in accuracy. Small models decode faster with `--threads 4` on the M1, as the scaling tables below show.
+
+### Serve
+
+`axon-server` puts one model behind the OpenAI chat completions API, so any client that takes a base URL can talk to it:
+
+```
+$ ./build/release/apps/axon-server/axon-server -m models/SmolLM2-135M-Instruct-f16.gguf --port 8080
+model: Smollm2 135M 8k Lc100K Mix1 Ep2 (llama layers 30 embd 576 heads 9 kv 3 ff 1536 vocab 49152 ctx 8192 rope normal 100000 tied), loaded in 0.02 s, 8 threads, neon kernels, context 4096, f32 cache
+serving 'SmolLM2-135M-Instruct-f16' at http://127.0.0.1:8080/v1 (no authentication), one request at a time, queue of 16
+```
+
+```
+$ curl -s localhost:8080/v1/chat/completions -H 'Content-Type: application/json' -d '{
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "max_tokens": 32, "temperature": 0
+  }'
+{"choices":[{"finish_reason":"length","index":0,"message":{"content":"The capital of France is Paris. It's a city that has been a beacon for art, culture, and innovation since ancient times. The French people have always","role":"assistant"}}],"created":1792511424,"id":"chatcmpl-MYIiDtVP49yGqbxuFuKzNxSz","model":"SmolLM2-135M-Instruct-f16","object":"chat.completion","usage":{"completion_tokens":32,"prompt_tokens":37,"total_tokens":69}}
+```
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="unused")
+for chunk in client.chat.completions.create(
+    model="SmolLM2-135M-Instruct-f16",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    stream=True,
+):
+    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```
+
+The routes are `POST /v1/chat/completions` (streaming over server-sent events when `stream` is true), `POST /v1/completions` for a raw prompt, `GET /v1/models` and `GET /health`, which reports the queue depth and the requests served. Requests take the OpenAI fields `max_tokens`, `temperature`, `top_p`, `seed`, `stop` (up to four strings, matched on the text), `stream` and `stream_options.include_usage`, plus the sampler's `top_k`, `min_p` and `repetition_penalty` as extensions. Fields the server cannot honour, such as `n` above one, `tools` or `logprobs`, are refused with 400 and the field's name rather than ignored. Errors come in the OpenAI error shape.
+
+One worker owns the engine, so requests are served in arrival order and `--max-queue` bounds how many may wait before new ones get 503 with a `Retry-After` header. A chat client that resends the whole conversation each turn pays one turn of prefill per request, since the engine reuses the cached prefix. A client that disconnects mid-stream stops its generation within one token. `--api-key` requires `Authorization: Bearer <key>` on the API routes, `--ctx` sets the context the prompt and completion must fit, and `--threads`, `--cache` and `--force-scalar` work as in `axon`.
+
+The Dockerfile builds the server on Debian with clang and runs it in an image that holds only the two binaries and the C++ runtime:
+
+```
+$ docker build -t axon-infer .
+$ docker run --rm -p 8080:8080 -v "$PWD/models:/models:ro" axon-infer -m /models/SmolLM2-135M-Instruct-f16.gguf
+```
+
+The image is 144 MB. On an arm64 host it gets the NEON kernel table, on x86 the scalar one. On macOS, Docker Desktop must be allowed to share the folder that holds the models, and the Desktop folder is not shared by default.
 
 ### Generate
 
@@ -452,6 +494,11 @@ Chat prompts come from the model's own template, read from the GGUF metadata and
 
 The engine keeps the conversation's tokens alongside the cache. When a new prompt arrives it finds the longest common prefix with what the cache holds, truncates to it, and prefills only the rest. A chat template that re-renders the whole transcript every turn therefore costs one turn of prefill.
 
+### Server
+
+The server is a thin layer that knows nothing the engine does not. Request bodies are parsed into the engine's terms by code that is tested on JSON alone, chat messages go through the same template path as `axon chat`, and stop strings are matched on the decoded text by a holdback buffer that releases only what can no longer begin a stop string. One worker thread owns the engine, because the engine holds one cache and one arena and a second generation at once would mean a second copy of both on an 8 GB machine, so requests queue in arrival order and the queue is bounded. Streaming runs through a per-request channel from the worker to the connection's thread, and the connection's thread cancels the job when its client has gone, which the engine honours before the next decode step. The synthetic model drives the whole server in the default test suite, over a real socket, in every preset including the sanitizers, which is how the thread sanitizer found that the tokenizer's merge lookup was not safe to call from two threads at once.
+
+
 ## Development
 
 ```sh
@@ -464,11 +511,11 @@ scripts/format.sh          # clang-format all sources
 cmake --preset tidy && cmake --build --preset tidy
 ```
 
-`scripts/check_all.sh` runs every gate in one go: format check, build and tests for the debug, release, ASan+UBSan and TSan presets, clang-tidy, the integration tests when models are present, and a benchmark smoke run. It is the required check before a change is merged.
+`scripts/check_all.sh` runs every gate in one go: format check, build and tests for the debug, release, ASan+UBSan and TSan presets, clang-tidy, the integration tests when models are present, and a benchmark smoke run. It is the required check before a change is merged. The server and its two header-only libraries are built unless `AXON_BUILD_SERVER` is off.
 
 Presets: `debug`, `release`, `release-native` (adds `-march=native`), `asan-ubsan`, `tsan`, `fuzz`, `coverage`, `tidy`.
 
-Dependencies are fetched by CMake at configure time: fmt, CLI11, Catch2 (tests), Google Benchmark (bench). Nothing else.
+Dependencies are fetched by CMake at configure time: fmt, CLI11, Catch2 (tests), Google Benchmark (bench), cpp-httplib and nlohmann/json (server). Nothing else.
 
 Tests that need real model files are opt-in: run `scripts/download_models.sh`, then `AXON_MODELS_DIR=$PWD/models ctest --preset release -L integration` (an absolute path, because ctest runs from the build tree). Without the variable they are skipped. The integration tests take under four minutes with the default thread count, most of it the F16 perplexity pass.
 

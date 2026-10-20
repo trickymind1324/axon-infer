@@ -1,0 +1,10 @@
+build/
+build-*/
+models/
+third_party/
+.venv/
+docs/
+.git/
+.cache/
+*.gguf
+!tests/reference/fixtures/**/*.gguf
