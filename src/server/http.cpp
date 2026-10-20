@@ -127,11 +127,12 @@ void HttpServer::routes() {
   svr.set_keep_alive_timeout(std::chrono::seconds(10));
 
   if (!options_.api_key.empty()) {
-    const std::string expected = "Bearer " + options_.api_key;
-    svr.set_pre_routing_handler([expected](const httplib::Request& req, httplib::Response& res) {
-      // Runs before routing, where an exception would have no handler, so it keeps its own.
+    bearer_ = "Bearer " + options_.api_key;
+    svr.set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+      // Runs before routing, where nothing catches an exception, so it never lets one out: a
+      // failure here only sets the status and the error handler writes the body.
       try {
-        if (req.path.starts_with("/v1") && req.get_header_value("Authorization") != expected) {
+        if (req.path.starts_with("/v1") && req.get_header_value("Authorization") != bearer_) {
           res.set_header("WWW-Authenticate", "Bearer");
           respond_error(res, ApiError{.status = 401,
                                       .type = "authentication_error",
@@ -140,12 +141,8 @@ void HttpServer::routes() {
                                       .param = std::nullopt});
           return httplib::Server::HandlerResponse::Handled;
         }
-      } catch (const std::exception&) {
-        respond_error(res, ApiError{.status = 500,
-                                    .type = "server_error",
-                                    .code = "internal_error",
-                                    .message = "authentication check failed",
-                                    .param = std::nullopt});
+      } catch (...) {
+        res.status = 500;
         return httplib::Server::HandlerResponse::Handled;
       }
       return httplib::Server::HandlerResponse::Unhandled;

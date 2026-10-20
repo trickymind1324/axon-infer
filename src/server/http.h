@@ -47,6 +47,7 @@ private:
   void routes();
 
   ServerOptions options_;
+  std::string bearer_;  // "Bearer <key>" when a key is set
   chat::ChatTemplate template_;
   Context context_;
   engine::Engine engine_;
