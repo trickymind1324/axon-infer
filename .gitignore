@@ -31,3 +31,7 @@ tests/reference/local/
 
 # llama.cpp checkout for the comparison script
 third_party/
+
+# release tarballs
+dist/
+dist-*/

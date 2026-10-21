@@ -17,6 +17,13 @@ RUN cmake -S . -B build -G Ninja \
       -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
       -DAXON_BUILD_TESTS=OFF -DAXON_BUILD_BENCH=OFF \
     && cmake --build build --target axon-server axon
+# The Linux tarball, the same build as the image. AXON_COMMIT names the commit, since the
+# build context carries no .git. `docker build --target dist --output type=local,dest=dist-linux .`
+ARG AXON_COMMIT=unknown
+RUN CC=clang CXX=clang++ AXON_COMMIT="$AXON_COMMIT" scripts/package_release.sh --no-tests
+
+FROM scratch AS dist
+COPY --from=build /src/dist /
 
 FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 \
