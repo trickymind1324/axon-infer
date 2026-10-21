@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="14">
+  <title>axon-infer: from a GGUF file to a sampled token</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#555"/>
+    </marker>
+    <style>
+      .box { fill: #f7f7f9; stroke: #444; stroke-width: 1.2; rx: 6; }
+      .kernel { fill: #eef4ff; stroke: #2f5fb3; stroke-width: 1.2; rx: 6; }
+      .store { fill: #fff8e6; stroke: #b3862f; stroke-width: 1.2; rx: 6; }
+      .top { fill: #effaf0; stroke: #2f8a46; stroke-width: 1.2; rx: 6; }
+      .title { font-weight: 600; fill: #222; }
+      .note { fill: #555; font-size: 12px; }
+      .flow { stroke: #555; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <!-- Inputs -->
+  <rect class="store" x="24" y="40" width="168" height="64"/>
+  <text class="title" x="108" y="66" text-anchor="middle">GGUF file</text>
+  <text class="note" x="108" y="86" text-anchor="middle">memory-mapped, read-only</text>
+
+  <rect class="box" x="24" y="140" width="168" height="64"/>
+  <text class="title" x="108" y="166" text-anchor="middle">Tokenizer</text>
+  <text class="note" x="108" y="186" text-anchor="middle">byte-level BPE, SentencePiece</text>
+
+  <rect class="box" x="24" y="240" width="168" height="64"/>
+  <text class="title" x="108" y="266" text-anchor="middle">Chat template</text>
+  <text class="note" x="108" y="286" text-anchor="middle">Jinja subset, family fallbacks</text>
+
+  <!-- Model -->
+  <rect class="box" x="248" y="40" width="200" height="100"/>
+  <text class="title" x="348" y="66" text-anchor="middle">Model</text>
+  <text class="note" x="348" y="86" text-anchor="middle">config from metadata</text>
+  <text class="note" x="348" y="104" text-anchor="middle">weights bound with shape checks</text>
+  <text class="note" x="348" y="122" text-anchor="middle">seven weight formats</text>
+
+  <rect class="box" x="248" y="176" width="200" height="128"/>
+  <text class="title" x="348" y="202" text-anchor="middle">Forward pass</text>
+  <text class="note" x="348" y="222" text-anchor="middle">norm, q/k/v, RoPE, attention,</text>
+  <text class="note" x="348" y="240" text-anchor="middle">output, SwiGLU, residuals</text>
+  <text class="note" x="348" y="262" text-anchor="middle">one arena, sized at load</text>
+  <text class="note" x="348" y="280" text-anchor="middle">rows: one, a prompt chunk, a batch</text>
+
+  <rect class="store" x="248" y="340" width="200" height="64"/>
+  <text class="title" x="348" y="366" text-anchor="middle">Key/value cache</text>
+  <text class="note" x="348" y="386" text-anchor="middle">per sequence, F32 or fp16</text>
+
+  <!-- Kernels -->
+  <rect class="kernel" x="504" y="40" width="200" height="140"/>
+  <text class="title" x="604" y="66" text-anchor="middle">Kernel table</text>
+  <text class="note" x="604" y="88" text-anchor="middle">scalar reference</text>
+  <text class="note" x="604" y="106" text-anchor="middle">NEON overrides on arm64</text>
+  <text class="note" x="604" y="128" text-anchor="middle">matmul single-row and tiled,</text>
+  <text class="note" x="604" y="146" text-anchor="middle">attention, norm, RoPE, softmax,</text>
+  <text class="note" x="604" y="164" text-anchor="middle">activation quantization</text>
+
+  <rect class="kernel" x="504" y="216" width="200" height="64"/>
+  <text class="title" x="604" y="242" text-anchor="middle">Thread pool</text>
+  <text class="note" x="604" y="262" text-anchor="middle">chunked claims, spin budget</text>
+
+  <!-- Engine -->
+  <rect class="box" x="760" y="40" width="176" height="100"/>
+  <text class="title" x="848" y="66" text-anchor="middle">Sampler</text>
+  <text class="note" x="848" y="86" text-anchor="middle">penalty, temperature,</text>
+  <text class="note" x="848" y="104" text-anchor="middle">top-k, top-p, min-p</text>
+  <text class="note" x="848" y="122" text-anchor="middle">own generator, no allocation</text>
+
+  <rect class="box" x="760" y="176" width="176" height="128"/>
+  <text class="title" x="848" y="202" text-anchor="middle">Engine</text>
+  <text class="note" x="848" y="222" text-anchor="middle">a Sequence per generation</text>
+  <text class="note" x="848" y="240" text-anchor="middle">prefix reuse, end rules</text>
+  <text class="note" x="848" y="262" text-anchor="middle">batch of sequences</text>
+  <text class="note" x="848" y="280" text-anchor="middle">speculator, context shift</text>
+
+  <!-- Top layer -->
+  <rect class="top" x="248" y="448" width="688" height="80"/>
+  <text class="title" x="592" y="474" text-anchor="middle">Commands and server</text>
+  <text class="note" x="592" y="496" text-anchor="middle">axon chat, generate, bench, tokenize, axon-perplexity, axon-dump</text>
+  <text class="note" x="592" y="514" text-anchor="middle">axon-server: OpenAI chat completions, streaming, slots, one worker</text>
+
+  <!-- Flows -->
+  <path class="flow" d="M 192 72 L 248 72"/>
+  <path class="flow" d="M 348 140 L 348 176"/>
+  <path class="flow" d="M 448 200 L 504 160"/>
+  <path class="flow" d="M 448 248 L 504 248"/>
+  <path class="flow" d="M 348 304 L 348 340"/>
+  <path class="flow" d="M 448 296 L 724 296 L 724 240 L 760 240"/>
+  <path class="flow" d="M 848 140 L 848 176"/>
+  <path class="flow" d="M 848 304 L 848 448"/>
+  <path class="flow" d="M 108 204 L 108 240"/>
+  <path class="flow" d="M 108 304 L 108 488 L 248 488"/>
+  <text class="note" x="118" y="400" text-anchor="start">text in, tokens out</text>
+</svg>

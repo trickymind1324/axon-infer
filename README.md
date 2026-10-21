@@ -63,6 +63,8 @@ Platforms: developed and benchmarked on macOS arm64 (Apple M1), where the NEON t
 
 ## Architecture
 
+![The path from a GGUF file to a sampled token: the file is mapped and its weights bound, the forward pass runs on the kernel table and the thread pool with one arena and a cache per sequence, the engine drives sequences, batches and the speculator, and the commands and the server sit on top](assets/architecture.svg)
+
 ```
 GGUF file ──mmap──▶ GGUFFile ──▶ weight binding ──▶ LlamaModel
                                                        │
