@@ -1,0 +1,76 @@
+{
+ "step": "08c-spec",
+ "date": "2026-10-21T07:18:53Z",
+ "host": "m1",
+ "cpu": "Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16",
+ "ram_gb": 8,
+ "os": "macOS 27.0.1 (arm64)",
+ "compiler": "clang 21.0.0",
+ "commit": "8155239d94ee",
+ "dirty": false,
+ "peak_gb_s": 68.25,
+ "model": {
+  "file": "qwen2.5-1.5b-instruct-q4_0",
+  "bytes": 1066227232,
+  "sha256": "dcd819ff094852c38faba6873d8ff0c9d51eadb2844539e52042ae5d647bbfdb"
+ },
+ "model_file": "models/qwen2.5-1.5b-instruct-q4_0.gguf",
+ "kernels": "neon",
+ "cache": "f32",
+ "threads": 4,
+ "context": 2048,
+ "batch": 1,
+ "draft": "qwen2.5-0.5b-instruct-q4_0",
+ "draft_tokens": 4,
+ "acceptance": 0.7422,
+ "tokens_per_pass": 3.969,
+ "spin_budget_us": 200,
+ "launches_per_token": 141.0,
+ "prompt_tokens": 512,
+ "generated_tokens": 128,
+ "runs": 5,
+ "prefill_tok_s": {
+  "median": 62.755,
+  "best": 64.451
+ },
+ "decode_tok_s": {
+  "median": 21.993,
+  "best": 22.931
+ },
+ "weight_bytes_per_token": 929004896,
+ "cache_bytes_per_token": 33001472,
+ "weight_gb_s": 20.431,
+ "peak_rss_mb": 1355.9,
+ "load_average": {
+  "before": 11.01,
+  "after": 7.92
+ },
+ "measurements": [
+  {
+   "prefill_s": 8.1587,
+   "decode_s": 5.8092,
+   "peak_rss_mb": 1355.9
+  },
+  {
+   "prefill_s": 8.2191,
+   "decode_s": 5.8202,
+   "peak_rss_mb": 1355.9
+  },
+  {
+   "prefill_s": 8.1598,
+   "decode_s": 5.828,
+   "peak_rss_mb": 1355.9
+  },
+  {
+   "prefill_s": 7.9441,
+   "decode_s": 5.5819,
+   "peak_rss_mb": 1355.9
+  },
+  {
+   "prefill_s": 8.0824,
+   "decode_s": 5.9616,
+   "peak_rss_mb": 1355.9
+  }
+ ],
+ "description": "qwen2 layers 28 embd 1536 heads 12 kv 2 ff 8960 vocab 151936 ctx 32768 rope neox 1000000 qkv-bias"
+}
