@@ -19,6 +19,7 @@ MODELS=(
   "smollm2-135m-f16|bartowski/SmolLM2-135M-Instruct-GGUF|SmolLM2-135M-Instruct-f16.gguf|f535f83ec568d040f88ddc04a199fa6da90923bbb41d4dcaed02caa924d6ef57"
   "smollm2-135m-q8_0|bartowski/SmolLM2-135M-Instruct-GGUF|SmolLM2-135M-Instruct-Q8_0.gguf|5a1395716f7913741cc51d98581b9b1228d80987a9f7d3664106742eb06bba83"
   "smollm2-135m-q4_0|bartowski/SmolLM2-135M-Instruct-GGUF|SmolLM2-135M-Instruct-Q4_0.gguf|bcc3af2849ad6095af57e9b5cd43775256efdc66e306acb529172f92d0c04b03"
+  "smollm2-1.7b-q4_0|bartowski/SmolLM2-1.7B-Instruct-GGUF|SmolLM2-1.7B-Instruct-Q4_0.gguf|99b866e77adee858930244229afa833dbe3372a7bf122905ea506119c6911ae8"
   "tinyllama-1.1b-f16|mradermacher/TinyLlama-1.1B-Chat-v1.0-GGUF|TinyLlama-1.1B-Chat-v1.0.f16.gguf|f83b5b067440dc582f8a9c217c3a17c15234a5c7ce1899f54d3a9f0f2007245a"
   "tinyllama-1.1b-q4_0|TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF|tinyllama-1.1b-chat-v1.0.Q4_0.gguf|da3087fb14aede55fde6eb81a0e55e886810e43509ec82ecdc7aa5d62a03b556"
   "qwen2.5-0.5b-q8_0|Qwen/Qwen2.5-0.5B-Instruct-GGUF|qwen2.5-0.5b-instruct-q8_0.gguf|ca59ca7f13d0e15a8cfa77bd17e65d24f6844b554a7b6c12e07a5f89ff76844e"
