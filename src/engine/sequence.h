@@ -68,6 +68,10 @@ public:
   [[nodiscard]] std::span<const std::int32_t> history() const noexcept { return history_; }
   [[nodiscard]] std::span<const std::int32_t> generated() const noexcept { return generated_; }
   [[nodiscard]] std::size_t prompt_remaining() const noexcept { return prompt_.size() - fed_; }
+  // Drops the oldest tokens after the first `keep`, half of them, and re-prefills what stays,
+  // so the cache has room again. Exact, since nothing cached is approximated. False when
+  // there is nothing to drop.
+  Expected<bool> shift(std::size_t keep);
   void clear();  // forgets the cache and history
   // Ends a generation without the usual flush, for a pass that failed underneath it.
   void abandon() noexcept { state_ = State::Done; }

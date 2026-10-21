@@ -148,15 +148,46 @@ bool Sequence::accept_pending() {
     end(Finish::Length);
     return false;
   }
-  if (cache_.pos() >= cache_.max_ctx()) {
-    stats_.context_full = true;
-    end(Finish::Length);
-    return false;
+  // Full means the fed history fills the context. The cache itself may hold more during a
+  // speculative round, where drafts not yet accepted sit in it, and those do not count.
+  if (history_.size() >= cache_.max_ctx()) {
+    bool shifted = false;
+    if (opts_.context_shift) {
+      const auto done = shift(opts_.keep);
+      shifted = done && *done;
+    }
+    if (!shifted) {
+      stats_.context_full = true;
+      end(Finish::Length);
+      return false;
+    }
+    ++stats_.context_shifts;
+    stats_.last_shift_at = generated_.size();
   }
   if (opts_.cancel != nullptr && opts_.cancel->load(std::memory_order_relaxed)) {
     stats_.cancelled = true;
     end(Finish::Cancelled);
     return false;
+  }
+  return true;
+}
+
+Expected<bool> Sequence::shift(std::size_t keep) {
+  keep = std::min(keep, history_.size());
+  const std::size_t rest = history_.size() - keep;
+  const std::size_t drop = rest / 2;
+  if (drop == 0) {
+    return false;
+  }
+  history_.erase(history_.begin() + static_cast<std::ptrdiff_t>(keep),
+                 history_.begin() + static_cast<std::ptrdiff_t>(keep + drop));
+  cache_.truncate(keep);
+  for (std::size_t offset = keep; offset < history_.size(); offset += model_.max_seq()) {
+    const std::size_t n = std::min(model_.max_seq(), history_.size() - offset);
+    const auto out = model_.forward_prefill(cache_, std::span(history_).subspan(offset, n));
+    if (!out) {
+      return out.error();
+    }
   }
   return true;
 }
