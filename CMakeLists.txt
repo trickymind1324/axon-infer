@@ -52,9 +52,12 @@ configure_file(include/axon/version.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/a
 
 if(AXON_CLANG_TIDY)
   find_program(AXON_CLANG_TIDY_EXE NAMES clang-tidy clang-tidy-17 clang-tidy-18 REQUIRED)
+  # The header filter is a regex, so the source path's special characters are escaped. A
+  # checkout under a directory such as C++ would otherwise match no header at all.
+  string(REGEX REPLACE "([][+.*()^$?|{}\\])" "\\\\\\1" AXON_SOURCE_DIR_REGEX "${PROJECT_SOURCE_DIR}")
   # Only project headers are checked; fetched dependencies are never linted.
   set(AXON_CLANG_TIDY_COMMAND "${AXON_CLANG_TIDY_EXE}"
-      "--header-filter=^${PROJECT_SOURCE_DIR}/(include|src|apps|bench|tests)/")
+      "--header-filter=^${AXON_SOURCE_DIR_REGEX}/(include|src|apps|bench|tests)/")
   if(APPLE)
     # A non-Apple clang-tidy needs the SDK path that Apple clang locates implicitly.
     execute_process(

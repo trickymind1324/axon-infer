@@ -15,6 +15,8 @@ struct CodePointRange {
 inline constexpr const char* kUnicodeVersion = "15.0.0";
 
 // General categories Lu, Ll, Lt, Lm, Lo (659 ranges).
+// Generated tables, rows written by position.
+// NOLINTBEGIN(modernize-use-designated-initializers)
 inline constexpr CodePointRange kLetters[] = {
     {0x41, 0x5A},       {0x61, 0x7A},       {0xAA, 0xAA},       {0xB5, 0xB5},
     {0xBA, 0xBA},       {0xC0, 0xD6},       {0xD8, 0xF6},       {0xF8, 0x2C1},
@@ -227,5 +229,7 @@ inline constexpr CodePointRange kWhiteSpace[] = {
     {0x9, 0xD},       {0x20, 0x20},     {0x85, 0x85},     {0xA0, 0xA0},     {0x1680, 0x1680},
     {0x2000, 0x200A}, {0x2028, 0x2029}, {0x202F, 0x202F}, {0x205F, 0x205F}, {0x3000, 0x3000},
 };
+
+// NOLINTEND(modernize-use-designated-initializers)
 
 }  // namespace axon::unicode_tables

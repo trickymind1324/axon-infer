@@ -47,13 +47,13 @@ TEST_CASE("a forward profile charges the launches and leaves the logits alone",
     CHECK(s >= 0.0);
   }
   CHECK(profile.total() > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kQkv] > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kAttention] > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kGateUp] > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kDown] > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kLogits] > 0.0);
-  CHECK(profile.seconds[ForwardProfile::kQuantize] > 0.0);  // Q8_0 weights quantize the rows
-  CHECK(std::string(ForwardProfile::name(ForwardProfile::kGateUp)) == "gate_up");
+  CHECK(profile.seconds[ForwardProfile::Qkv] > 0.0);
+  CHECK(profile.seconds[ForwardProfile::Attention] > 0.0);
+  CHECK(profile.seconds[ForwardProfile::GateUp] > 0.0);
+  CHECK(profile.seconds[ForwardProfile::Down] > 0.0);
+  CHECK(profile.seconds[ForwardProfile::Logits] > 0.0);
+  CHECK(profile.seconds[ForwardProfile::Quantize] > 0.0);  // Q8_0 weights quantize the rows
+  CHECK(std::string(ForwardProfile::name(ForwardProfile::GateUp)) == "gate_up");
 }
 
 TEST_CASE("the F32 model quantizes nothing and the report covers the prompt and one token",
@@ -64,8 +64,8 @@ TEST_CASE("the F32 model quantizes nothing and the report covers the prompt and 
   const auto report = axon::engine::profile_forward(*model, std::span(tokens).first(20));
   REQUIRE(report);
   CHECK(report->prompt_tokens == 20);
-  CHECK(report->prefill.seconds[ForwardProfile::kQuantize] == 0.0);
-  CHECK(report->decode.seconds[ForwardProfile::kQuantize] == 0.0);
+  CHECK(report->prefill.seconds[ForwardProfile::Quantize] == 0.0);
+  CHECK(report->decode.seconds[ForwardProfile::Quantize] == 0.0);
   CHECK(report->prefill.total() > 0.0);
   CHECK(report->decode.total() > 0.0);
   const auto text = axon::engine::profile_text(*report);

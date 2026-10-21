@@ -26,6 +26,8 @@ struct Composition {
 };
 
 // Canonical decompositions, sorted by code point (2061 entries). Hangul is algorithmic.
+// Generated tables, rows written by position.
+// NOLINTBEGIN(modernize-use-designated-initializers)
 inline constexpr Decomposition kDecompositions[] = {
     {0xC0, 0x41, 0x300},         {0xC1, 0x41, 0x301},         {0xC2, 0x41, 0x302},
     {0xC3, 0x41, 0x303},         {0xC4, 0x41, 0x308},         {0xC5, 0x41, 0x30A},
@@ -1167,5 +1169,7 @@ inline constexpr Composition kCompositions[] = {
     {0x114B9, 0x114BA, 0x114BB}, {0x114B9, 0x114BD, 0x114BE}, {0x115B8, 0x115AF, 0x115BA},
     {0x115B9, 0x115AF, 0x115BB}, {0x11935, 0x11930, 0x11938},
 };
+
+// NOLINTEND(modernize-use-designated-initializers)
 
 }  // namespace axon::nfc_tables

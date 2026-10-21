@@ -32,3 +32,9 @@ CheckOptions:
   readability-identifier-naming.MacroDefinitionCase: UPPER_CASE
   readability-identifier-naming.TemplateParameterCase: CamelCase
   readability-identifier-naming.TypeAliasCase: CamelCase
+  # The GGUF format names (Q4_0, BlockQ6_K, kQK8_0) are spelled as the format spells them, and
+  # value_type is the name the standard library expects.
+  readability-identifier-naming.EnumConstantIgnoredRegexp: '^(I|T)?Q[0-9](_[A-Z0-9]+)+$'
+  readability-identifier-naming.StructIgnoredRegexp: '^BlockQ[0-9]_[A-Z0-9]+$'
+  readability-identifier-naming.ConstexprVariableIgnoredRegexp: '^kQK[0-9A-Z_]*$'
+  readability-identifier-naming.TypeAliasIgnoredRegexp: '^(value_type|error_type)$'

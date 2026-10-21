@@ -16,6 +16,9 @@ class GGUFFile;
 class Vocab;
 
 // tokenizer.ggml.token_type values.
+// The width of tokenizer.ggml.token_type in the file, so a raw value converts without
+// truncation and the range check after the cast sees what was read.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class TokenType : std::int32_t {
   Undefined = 0,
   Normal = 1,

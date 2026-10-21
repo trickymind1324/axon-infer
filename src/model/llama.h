@@ -47,17 +47,17 @@ struct LoadOptions {
 // Seconds accumulate across calls, so a caller can profile a whole prompt in chunks.
 struct ForwardProfile {
   enum Slot : std::uint8_t {
-    kQuantize,    // activation rows quantized to Q8_0 blocks
-    kQkv,         // the fused q, k and v projections
-    kAttention,   // attention over the cache or the staged keys and values
-    kOutputProj,  // the attention output projection
-    kGateUp,      // the fused gate and up projections with the SiLU product
-    kDown,        // the down projection
-    kLogits,      // the output matrix
-    kOther,       // embedding, norms, RoPE, biases, residual adds, fp16 cache rounding
-    kSlots
+    Quantize,    // activation rows quantized to Q8_0 blocks
+    Qkv,         // the fused q, k and v projections
+    Attention,   // attention over the cache or the staged keys and values
+    OutputProj,  // the attention output projection
+    GateUp,      // the fused gate and up projections with the SiLU product
+    Down,        // the down projection
+    Logits,      // the output matrix
+    Other,       // embedding, norms, RoPE, biases, residual adds, fp16 cache rounding
+    Slots
   };
-  std::array<double, kSlots> seconds{};
+  std::array<double, Slots> seconds{};
   [[nodiscard]] double total() const noexcept {
     double sum = 0.0;
     for (const double s : seconds) {
@@ -110,7 +110,7 @@ public:
                                                  const ForwardOptions& opts = {});
 
   // A cache sized for this model's max_ctx.
-  [[nodiscard]] KVCache new_cache() const { return KVCache(cfg_, max_ctx_, cache_type_); }
+  [[nodiscard]] KVCache new_cache() const { return {cfg_, max_ctx_, cache_type_}; }
   [[nodiscard]] CacheType cache_type() const noexcept { return cache_type_; }
   [[nodiscard]] std::size_t max_batch() const noexcept { return max_batch_; }
 

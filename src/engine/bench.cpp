@@ -276,7 +276,7 @@ std::string profile_text(const ProfileReport& report) {
   const auto per_prompt_token = static_cast<double>(report.prompt_tokens);
   std::string out = fmt::format("{:<10} {:>14} {:>7} {:>14} {:>7}\n", "launch", "prefill ms/tok",
                                 "share", "decode ms/tok", "share");
-  for (std::size_t i = 0; i < ForwardProfile::kSlots; ++i) {
+  for (std::size_t i = 0; i < ForwardProfile::Slots; ++i) {
     const auto slot = static_cast<ForwardProfile::Slot>(i);
     const double p = report.prefill.seconds[i];
     const double d = report.decode.seconds[i];

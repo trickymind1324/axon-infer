@@ -13,6 +13,8 @@
 
 namespace axon {
 
+// The width of the field in the file, see DType.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class AxtType : std::uint32_t { F32 = 0, F16 = 1, BF16 = 2, I32 = 3 };
 
 struct AxtTensor {

@@ -238,21 +238,21 @@ Expected<std::span<const float>> LlamaModel::forward_prefill(KVCache& cache,
 
 const char* ForwardProfile::name(Slot slot) noexcept {
   switch (slot) {
-  case kQuantize:
+  case Quantize:
     return "quantize";
-  case kQkv:
+  case Qkv:
     return "qkv";
-  case kAttention:
+  case Attention:
     return "attention";
-  case kOutputProj:
+  case OutputProj:
     return "wo";
-  case kGateUp:
+  case GateUp:
     return "gate_up";
-  case kDown:
+  case Down:
     return "down";
-  case kLogits:
+  case Logits:
     return "logits";
-  case kOther:
+  case Other:
     return "other";
   default:
     return "?";
@@ -433,7 +433,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
   const auto mm_fused = [&](std::span<const Segment> segments, const float* x,
                             ForwardProfile::Slot slot) {
     const auto n_in = static_cast<std::size_t>(segments[0].w->ne0);
-    tick(ForwardProfile::kOther);
+    tick(ForwardProfile::Other);
     bool quantized = false;
     for (const auto& seg : segments) {
       AXON_DCHECK(static_cast<std::size_t>(seg.w->ne0) == n_in,
@@ -444,7 +444,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
       }
     }
     if (quantized) {
-      tick(ForwardProfile::kQuantize);
+      tick(ForwardProfile::Quantize);
     }
     std::size_t total_columns = 0;
     for (const auto& seg : segments) {
@@ -502,7 +502,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     {
       const Segment qkv[] = {
           {.w = &w.wq, .y = a.q.data()}, {.w = &w.wk, .y = k_new}, {.w = &w.wv, .y = v_new}};
-      mm_fused(qkv, a.h.data(), ForwardProfile::kQkv);
+      mm_fused(qkv, a.h.data(), ForwardProfile::Qkv);
     }
     if (w.bq && w.bk && w.bv) {
       add_bias(a.q.data(), *w.bq, seq);
@@ -516,7 +516,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     AXON_DUMP(dump_this, "q", a.q);
     AXON_DUMP(dump_this, "k", std::span<const float>(k_new, seq * kv_row));
     AXON_DUMP(dump_this, "v", std::span<const float>(v_new, seq * kv_row));
-    tick(ForwardProfile::kOther);
+    tick(ForwardProfile::Other);
     if (batched) {
       // Each row's key and value go to its own cache at its own position, then every
       // (sequence, head) pair is one work item over that sequence's cache.
@@ -535,7 +535,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
           std::copy_n(v_new + i * kv_row, kv_row, c->v(l) + at);
         }
       }
-      tick(ForwardProfile::kOther);
+      tick(ForwardProfile::Other);
       const std::size_t q_row = n_head * head_dim;
       pool_.parallel_for(0, seq * n_head, 1, [&](std::size_t begin, std::size_t end, int tid) {
         float* scores = a.scores.data() + static_cast<std::size_t>(tid) * seq * total;
@@ -561,7 +561,7 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
         k16[i] = fp32_to_fp16(k_new[i]);
         v16[i] = fp32_to_fp16(v_new[i]);
       }
-      tick(ForwardProfile::kOther);
+      tick(ForwardProfile::Other);
     }
     if (!batched) {
       // One work item per head and group of query rows, so a prompt spreads over more items
@@ -589,9 +589,9 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
         }
       });
     }
-    tick(ForwardProfile::kAttention);
+    tick(ForwardProfile::Attention);
     AXON_DUMP(dump_this, "attn_out", a.attn);
-    mm(w.wo, a.attn.data(), a.h.data(), ForwardProfile::kOutputProj);
+    mm(w.wo, a.attn.data(), a.h.data(), ForwardProfile::OutputProj);
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_mid", a.x);
 
@@ -600,10 +600,10 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
     {
       // Gate and up as one launch over column pairs, with the SiLU product applied by the
       // thread that just produced both halves of its chunk.
-      tick(ForwardProfile::kOther);
+      tick(ForwardProfile::Other);
       const bool quantized = quantize_input(a.h.data(), w.w_gate);
       if (quantized) {
-        tick(ForwardProfile::kQuantize);
+        tick(ForwardProfile::Quantize);
       }
       pool_.parallel_for(0, n_ff, chunk_for(n_ff), [&](std::size_t begin, std::size_t end, int) {
         const BlockQ8_0* xq = quantized ? a.xq.data() : nullptr;
@@ -616,19 +616,19 @@ Expected<std::span<const float>> LlamaModel::run(std::span<const std::int32_t> t
           k.silu_mul(gate, up, gate, end - begin);
         }
       });
-      tick(ForwardProfile::kGateUp);
+      tick(ForwardProfile::GateUp);
     }
-    mm(w.w_down, a.gate.data(), a.h.data(), ForwardProfile::kDown);
+    mm(w.w_down, a.gate.data(), a.h.data(), ForwardProfile::Down);
     AXON_DUMP(dump_this, "ffn_out", a.h);
     add_rows(a.x, a.h);
     AXON_DUMP(dump_this, "x_out", a.x);
   }
 
   rmsnorm_rows(k, a.x, weights_.output_norm, a.h, seq, cfg_.rms_eps);
-  mm(weights_.output, a.h.data(), a.logits.data(), ForwardProfile::kLogits);
+  mm(weights_.output, a.h.data(), a.logits.data(), ForwardProfile::Logits);
   AXON_DUMP(dumping, "logits", a.logits);
 #undef AXON_DUMP
-  tick(ForwardProfile::kOther);
+  tick(ForwardProfile::Other);
   if (cache != nullptr) {
     cache->advance(seq);
   }

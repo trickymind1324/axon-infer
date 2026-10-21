@@ -11,7 +11,7 @@ namespace axon {
 
 // The regex families used by the supported byte-level BPE vocabularies. Each is a hand-written
 // matcher reproducing the reference pattern (the reference patterns are quoted in the tests).
-enum class PreType {
+enum class PreType : std::uint8_t {
   Gpt2,    // 's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
   Llama3,  // (?i:'s|...)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}|
            // ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+

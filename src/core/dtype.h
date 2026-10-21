@@ -11,6 +11,9 @@ namespace axon {
 // Tensor element types. Values are the ggml type ids as written in GGUF files. Every id ggml
 // has assigned is listed so any file can be inspected; only a few are runnable (see
 // DTypeInfo::compute_supported).
+// The width of the field in the file, so a raw code converts without truncation and the
+// range check after the cast sees what was read.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class DType : std::uint32_t {
   F32 = 0,
   F16 = 1,

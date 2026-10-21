@@ -17,6 +17,8 @@
 
 namespace axon {
 
+// The width of the field in the file, see DType.
+// NOLINTNEXTLINE(performance-enum-size)
 enum class GGUFValueType : std::uint32_t {
   UInt8 = 0,
   Int8 = 1,

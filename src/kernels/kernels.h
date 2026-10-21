@@ -20,7 +20,7 @@ namespace axon::kernels {
 // Normal rotates adjacent pairs (x[2i], x[2i+1]) as Llama 2 and Llama 3 do once the GGUF
 // converter has permuted their Q/K weights. NeoX rotates halves (x[i], x[i + rotary_dim/2]) as
 // Qwen2 does.
-enum class RopeStyle { Normal, NeoX };
+enum class RopeStyle : std::uint8_t { Normal, NeoX };
 
 struct RopeParams {
   std::size_t head_dim;

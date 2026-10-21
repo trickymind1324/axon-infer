@@ -15,7 +15,7 @@ namespace axon::model {
 // value once on the way in.
 enum class CacheType : std::uint8_t { F32, F16 };
 
-enum class RopeScaling { None, Llama3 };
+enum class RopeScaling : std::uint8_t { None, Llama3 };
 
 // Everything the forward pass needs to know about a model, read from GGUF metadata and the
 // tensor table. Two architectures share the LLaMA block: "llama" (Llama 2/3, SmolLM2,

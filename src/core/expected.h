@@ -44,7 +44,7 @@ struct Error {
 };
 
 inline Error make_error(ErrorCode code, std::string message) {
-  return Error{code, std::move(message)};
+  return Error{.code = code, .message = std::move(message)};
 }
 
 // Minimal result type: either a T or an Error. Used for I/O and parsing paths where
@@ -56,7 +56,9 @@ public:
   using value_type = T;
 
   // NOLINTNEXTLINE(google-explicit-constructor,hicpp-explicit-conversions)
-  Expected(T value) : has_value_(true) { new (&storage_.value) T(std::move(value)); }
+  Expected(T value) : has_value_(true) {
+    new (static_cast<void*>(&storage_.value)) T(std::move(value));
+  }
   // NOLINTNEXTLINE(google-explicit-constructor,hicpp-explicit-conversions)
   Expected(Error error) : has_value_(false) { new (&storage_.error) Error(std::move(error)); }
 
@@ -139,6 +141,8 @@ private:
 
   void swap_with(Expected& other) {
     Expected tmp(std::move(other));
+    // The moved-from object is destroyed and rebuilt in place below, which is the point.
+    // NOLINTNEXTLINE(bugprone-use-after-move)
     other.destroy();
     other.has_value_ = has_value_;
     if (has_value_) {

@@ -26,7 +26,7 @@ struct RenderOptions {
   std::string date_string;  // overrides the Llama 3 date when set, for stable fixtures
 };
 
-enum class Family { ChatML, Llama3, Zephyr, Plain };
+enum class Family : std::uint8_t { ChatML, Llama3, Zephyr, Plain };
 std::string_view family_name(Family family);
 
 class ChatTemplate {
