@@ -8,3 +8,5 @@ docs/
 .cache/
 *.gguf
 !tests/reference/fixtures/**/*.gguf
+dist/
+dist-*/
