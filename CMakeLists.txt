@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 project(
   axon-infer
-  VERSION 0.0.1
+  VERSION 0.1.0
   DESCRIPTION "LLM inference engine in C++20, built from scratch"
   LANGUAGES CXX)
 
