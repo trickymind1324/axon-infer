@@ -40,7 +40,7 @@ for threads in "${THREAD_COUNTS[@]}"; do
   echo "==> $MODEL_NAME, $threads threads"
   # shellcheck disable=SC2086
   RESULT="$("$AXON" bench -m "$MODEL" -t "$threads" --json ${BENCH_ARGS:-})"
-  SUFFIX="$(printf '%s' "$RESULT" | "$PYTHON" -c 'import json, sys; r = json.load(sys.stdin); b = r.get("batch", 1); d = r.get("draft", ""); print((f"-b{b}" if b > 1 else "") + (f"-spec{r.get(\"draft_tokens\", 0)}" if d else ""))')"
+  SUFFIX="$(printf '%s' "$RESULT" | "$PYTHON" -c 'import json, sys; r = json.load(sys.stdin); b = r.get("batch", 1); d = r.get("draft", ""); k = r.get("draft_tokens", 0); print(("-b%d" % b if b > 1 else "") + ("-spec%d" % k if d else ""))')"
   OUT="bench/results/${HOST}-${STEP}-${MODEL_NAME}-t${threads}${SUFFIX}.json"
   "$PYTHON" - "$RESULT" "$OUT" <<PY
 import json, sys
