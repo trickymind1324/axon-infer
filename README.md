@@ -24,7 +24,7 @@ LLM inference is memory-bandwidth-bound on most hardware, not compute-bound. Pro
 
 The scope is the LLaMA block: RMSNorm, rotary embeddings, grouped-query attention and a SwiGLU feed-forward. Training, multimodal models and other architectures are out of scope, and so is beating llama.cpp. The goal is a clean, measured, understandable engine.
 
-**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on a 135M model is still paced by the cost of handing work to threads rather than by bandwidth, so small models decode fastest at four threads and lose speed at eight. K-quant formats other than Q6_K load and can be inspected but do not run. The HTTP server serves one request at a time from a bounded queue, with batching across requests still to come.
+**Current limitations.** Optimized kernels exist for arm64 with NEON only, so x86 runs the scalar reference table. Decode on a 135M model is still paced by the cost of handing work to threads rather than by bandwidth, so small models decode fastest at four threads and lose speed at eight. K-quant formats other than Q6_K load and can be inspected but do not run. The HTTP server decodes up to four requests together and queues the rest, with speculative decoding and context shift still to come.
 
 ## Features
 
@@ -140,7 +140,7 @@ for chunk in client.chat.completions.create(
 
 The routes are `POST /v1/chat/completions` (streaming over server-sent events when `stream` is true), `POST /v1/completions` for a raw prompt, `GET /v1/models` and `GET /health`, which reports the queue depth and the requests served. Requests take the OpenAI fields `max_tokens`, `temperature`, `top_p`, `seed`, `stop` (up to four strings, matched on the text), `stream` and `stream_options.include_usage`, plus the sampler's `top_k`, `min_p` and `repetition_penalty` as extensions. Fields the server cannot honour, such as `n` above one, `tools` or `logprobs`, are refused with 400 and the field's name rather than ignored. Errors come in the OpenAI error shape.
 
-One worker owns the engine, so requests are served in arrival order and `--max-queue` bounds how many may wait before new ones get 503 with a `Retry-After` header. A chat client that resends the whole conversation each turn pays one turn of prefill per request, since the engine reuses the cached prefix. A client that disconnects mid-stream stops its generation within one token. `--api-key` requires `Authorization: Bearer <key>` on the API routes, `--ctx` sets the context the prompt and completion must fit, and `--threads`, `--cache` and `--force-scalar` work as in `axon`.
+Up to `--max-batch` requests (default four) decode together: each has its own cache of `--ctx` positions, and one forward pass per step advances all of them, reading the weights once for the batch. Requests beyond the slots wait in arrival order and `--max-queue` bounds how many may wait before new ones get 503 with a `Retry-After` header. A new prompt is prefilled one chunk per step while the others keep decoding, so running streams pause for a chunk rather than a whole prompt. A chat client that resends the whole conversation each turn gets back the slot that still holds its prefix and pays one turn of prefill. A client that disconnects mid-stream stops its generation within one token. `/health` reports the slots, the sequences running and the steps that batched, and every completion carries the batch size it ran in. Memory is slots times context: four Llama 3.2 1B slots at 4096 positions can touch 1 GB of F32 cache, half with `--cache f16`, and the reservation is lazy so untouched context costs nothing. `--api-key` requires `Authorization: Bearer <key>` on the API routes, `--ctx` sets the context the prompt and completion must fit, and `--threads`, `--cache` and `--force-scalar` work as in `axon`.
 
 The Dockerfile builds the server on Debian with clang and runs it in an image that holds only the two binaries and the C++ runtime:
 
@@ -246,7 +246,7 @@ Every number comes from `axon bench` through `bench/bench_e2e.sh`, which writes 
 $ ./build/release/apps/axon/axon bench -m models/SmolLM2-135M-Instruct-Q8_0.gguf --threads 4
 ```
 
-The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, `06b-neon` runs the NEON kernel table, `06d-fused` merges the launches that share an input and keeps idle workers spinning for a short budget, `06d-f16cache` is the same build with `--cache f16`, and `06e-gemm` runs prefill through multi-row kernel tiles and a NEON attention kernel. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
+The steps are the optimizations in the order they landed: `06a-static` split work statically across threads on the scalar kernels, `06a-threads` claims it in chunks, `06b-neon` runs the NEON kernel table, `06d-fused` merges the launches that share an input and keeps idle workers spinning for a short budget, `06d-f16cache` is the same build with `--cache f16`, `06e-gemm` runs prefill through multi-row kernel tiles and a NEON attention kernel, and `08b-batch` decodes several streams in one pass. Weight GB/s is the weight bytes one forward pass reads times the decode rate, the number to hold against the machine's bandwidth.
 
 | Step | Model | Threads | Prefill tok/s | Decode tok/s | Weight GB/s | Of peak |
 |---|---|---|---|---|---|---|
@@ -307,6 +307,10 @@ The steps are the optimizations in the order they landed: `06a-static` split wor
 | 06e-gemm | SmolLM2-135M-Instruct-f16 | 2 | 300.5 | 91.69 | 24.67 | 36% |
 | 06e-gemm | SmolLM2-135M-Instruct-f16 | 4 | 482.2 | 136.16 | 36.64 | 54% |
 | 06e-gemm | SmolLM2-135M-Instruct-f16 | 8 | 644.3 | 95.85 | 25.79 | 38% |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 4 | 85.0 | 32.73 | 25.04 | 37% |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 8 | 105.1 | 30.87 | 23.62 | 35% |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 4 | 1125.6 | 193.84 | 27.72 | 41% |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 8 | 1091.9 | 100.88 | 14.43 | 21% |
 
 Scaling of Llama-3.2-1B-Instruct-Q4_0 (Q4_0), step 06e-gemm, relative to 1 thread(s):
 
@@ -379,6 +383,27 @@ The scalar integer rows are already auto-vectorized by the compiler, which is wh
 | SmolLM2-135M-Instruct-Q8_0 | 8 | 06e-gemm | 1318.1 | 1721.6 | 77% | 132.94 | 179.27 | 74% |
 
 On Llama 3.2 1B Q4_0 at eight threads the engine decodes at 84 percent of llama.cpp and prefills at 34 percent, under the 40 percent this step set itself. The profile says where: half of a prompt token is the tied Q6_K output matrix, which the engine dequantizes to float and dots at 38 GFLOP/s per core, where llama.cpp quantizes the activations to 8-bit blocks and runs that matrix on integer dot products like the Q4_0 and Q8_0 paths here. The next lever is that integer activation path for Q6_K, a numerics change that gets its own Hugging Face gates. The rest of the gap is the Q4_0 tiles against llama.cpp's repacked layout. On the small model the engine is within a third of llama.cpp on both passes at four threads, and closer at eight because llama.cpp loses more there.
+
+### Batching
+
+`axon bench --batch N` admits N copies of the prompt into the batch engine, prefills them one chunk per step while the earlier ones decode, then decodes them as one batch for 128 tokens. The rates count every stream, and the single-stream rows are the same build at batch one in the same sitting. Decode speedup is aggregate throughput over the single stream.
+
+What the table shows. One weight pass serves every row of a step, so the second stream on Llama 3.2 1B is cheap: batch 2 decodes 1.6 times the tokens of a single stream, batch 4 between 2.0 and 2.2 times and batch 8 between 2.3 and 2.6 times, for 79 tokens per second aggregate on eight threads at 10 per stream. The curve flattens because a step with eight rows is no longer bound by reading the weights: the matmuls run at the rates prefill gets from the multi-row tiles, and the attention runs once per sequence, so aggregate decode converges towards the model's prefill throughput. On SmolLM2 the gain is smaller, 2.1 times at batch 8 on four threads, because attention over the 512-token context is already half of its decoded token and does not batch. Eight threads lose to four on the small model at every batch size, as they do on a single stream. The first run of this set exposed that a batch smaller than a tile's height fell to a one-row tail in the tiled kernels, so two rows cost two weight passes: Llama batch 2 gave 37 tokens per second before that fix and 53 after it.
+
+| Step | Model | Threads | Batch | Prefill tok/s | Decode tok/s | Per stream | Decode speedup |
+|---|---|---|---|---|---|---|---|
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 4 | 2 | 80.9 | 52.96 | 26.48 | 1.62x |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 4 | 4 | 77.7 | 66.21 | 16.55 | 2.02x |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 4 | 8 | 76.3 | 75.35 | 9.42 | 2.30x |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 8 | 2 | 101.7 | 49.65 | 24.82 | 1.61x |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 8 | 4 | 96.0 | 66.83 | 16.71 | 2.16x |
+| 08b-batch | Llama-3.2-1B-Instruct-Q4_0 | 8 | 8 | 93.7 | 79.13 | 9.89 | 2.56x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 4 | 2 | 1080.0 | 295.12 | 147.56 | 1.52x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 4 | 4 | 985.0 | 369.31 | 92.33 | 1.91x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 4 | 8 | 846.6 | 416.22 | 52.03 | 2.15x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 8 | 2 | 1119.2 | 127.92 | 63.96 | 1.27x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 8 | 4 | 1007.8 | 197.19 | 49.30 | 1.95x |
+| 08b-batch | SmolLM2-135M-Instruct-Q8_0 | 8 | 8 | 868.5 | 271.40 | 33.92 | 2.69x |
 
 ### Quantization accuracy
 
@@ -457,6 +482,22 @@ The fp16 cache is a different kind of trade. On the F16 file it leaves every arg
 | m1-06e-gemm-SmolLM2-135M-Instruct-f16-t2 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
 | m1-06e-gemm-SmolLM2-135M-Instruct-f16-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
 | m1-06e-gemm-SmolLM2-135M-Instruct-f16-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | c3fd65d982ca | 2026-10-20 | f535f83ec568 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | fa0390e7c043 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
+| m1-08b-batch-SmolLM2-135M-Instruct-Q8_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | df6726c76df8 | 2026-10-21 | 5a1395716f79 |
 | m1-llamacpp-Llama-3.2-1B-Instruct-Q4_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | fa0390e7c043 |
 | m1-llamacpp-Llama-3.2-1B-Instruct-Q4_0-t8 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | fa0390e7c043 |
 | m1-llamacpp-SmolLM2-135M-Instruct-Q8_0-t4 | m1 | Apple M1 (arm64) cores=8/8 cacheline=128 features=neon,dotprod,fp16 | llama.cpp 1ba568c5ad5c | 2026-10-20 | 5a1395716f79 |
@@ -495,6 +536,8 @@ Chat prompts come from the model's own template, read from the GGUF metadata and
 The engine keeps the conversation's tokens alongside the cache. When a new prompt arrives it finds the longest common prefix with what the cache holds, truncates to it, and prefills only the rest. A chat template that re-renders the whole transcript every turn therefore costs one turn of prefill.
 
 ### Server
+
+Several requests decode in one forward pass. Each row of a batched step runs the same instruction sequence the sequence would run alone: the multi-row matmul tiles are tested row by row against the single-row kernels, the attention computes each query row on its own against its own cache, and the norms, RoPE and residual adds are per row. So a batched step is bit-identical to decoding each sequence alone, which the tests assert as equality on every synthetic format, both kernel tables, several thread counts and both cache types, with sequences at unequal positions. One Sequence type holds a generation (its cache, sampler, decoder and end rules) and both the single-sequence engine and the batch engine drive it, so there is one implementation of the loop. The scheduler admits requests into free slots in arrival order, prefills one chunk of the oldest pending prompt per step, then advances everyone in decode together.
 
 The server is a thin layer that knows nothing the engine does not. Request bodies are parsed into the engine's terms by code that is tested on JSON alone, chat messages go through the same template path as `axon chat`, and stop strings are matched on the decoded text by a holdback buffer that releases only what can no longer begin a stop string. One worker thread owns the engine, because the engine holds one cache and one arena and a second generation at once would mean a second copy of both on an 8 GB machine, so requests queue in arrival order and the queue is bounded. Streaming runs through a per-request channel from the worker to the connection's thread, and the connection's thread cancels the job when its client has gone, which the engine honours before the next decode step. The synthetic model drives the whole server in the default test suite, over a real socket, in every preset including the sanitizers, which is how the thread sanitizer found that the tokenizer's merge lookup was not safe to call from two threads at once.
 
