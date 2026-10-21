@@ -6,6 +6,7 @@
 
 #include "core/expected.h"
 
+#include "engine/speculate.h"
 #include "model/llama.h"
 
 #include <cstddef>
@@ -34,6 +35,10 @@ struct BenchResult {
   std::size_t prompt_tokens = 0;
   std::size_t generated_tokens = 0;  // per stream
   std::size_t batch = 1;             // streams decoded together
+  std::string draft;                 // the draft model's name when decoding speculatively
+  std::size_t draft_tokens = 0;      // tokens the draft proposed per round
+  double acceptance = 0.0;           // drafted tokens the target kept, as a fraction
+  double tokens_per_pass = 0.0;      // tokens the target produced per weight pass
   int threads = 0;
   std::string kernels;  // table name, "scalar" or "neon"
   std::string cache;    // "f32" or "f16"
@@ -71,9 +76,13 @@ std::string profile_text(const ProfileReport& report);
 // One warm-up plus `runs` measured runs of prefill-then-decode on a fresh cache each time,
 // greedy, never stopping on end-of-generation tokens. The prompt must fit the context with
 // room for the generated tokens. Progress is called after each measured run.
+// With a speculator (batch one only) every run decodes speculatively and the result carries
+// the acceptance rate and the tokens per target pass.
 Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const std::int32_t> prompt,
                                     const BenchOptions& opts,
-                                    const std::function<void(const BenchRun&, int)>& progress = {});
+                                    const std::function<void(const BenchRun&, int)>& progress = {},
+                                    Speculator* speculator = nullptr,
+                                    std::string_view draft_name = {});
 
 // The result as one JSON object. `model_file` and `description` are copied in as strings.
 std::string bench_json(const BenchResult& result, std::string_view model_file,

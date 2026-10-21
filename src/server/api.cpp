@@ -133,8 +133,12 @@ std::variant<std::string, ApiError> message_content(const json& content, std::si
   return invalid(fmt::format("messages[{}].content must be a string", index), "messages");
 }
 
-std::variant<std::vector<std::int32_t>, ApiError> chat_prompt(const json& body,
-                                                              const Context& ctx) {
+struct ChatPrompt {
+  std::vector<std::int32_t> tokens;
+  std::size_t keep = 0;  // tokens of the rendered system message at the front
+};
+
+std::variant<ChatPrompt, ApiError> chat_prompt(const json& body, const Context& ctx) {
   const auto it = body.find("messages");
   if (it == body.end() || !it->is_array() || it->empty()) {
     return invalid("'messages' must be a non-empty array", "messages");
@@ -168,7 +172,19 @@ std::variant<std::vector<std::int32_t>, ApiError> chat_prompt(const json& body,
   if (text.starts_with(tok.token_text(tok.bos()))) {
     add_bos = false;
   }
-  return tok.encode(text, {.add_bos = add_bos, .parse_special = true});
+  ChatPrompt out;
+  out.tokens = tok.encode(text, {.add_bos = add_bos, .parse_special = true});
+  if (ctx.context_shift && messages.front().role == "system") {
+    // The longest prefix the system-only rendering shares with the prompt's tokens.
+    const std::span<const chat::Message> only(messages.data(), 1);
+    const auto head = tok.encode(ctx.chat_template->render(only, false),
+                                 {.add_bos = add_bos, .parse_special = true});
+    while (out.keep < head.size() && out.keep < out.tokens.size() &&
+           head[out.keep] == out.tokens[out.keep]) {
+      ++out.keep;
+    }
+  }
+  return out;
 }
 
 std::variant<std::vector<std::int32_t>, ApiError> text_prompt(const json& body,
@@ -336,11 +352,21 @@ ParseResult parse_request(const json& body, const Context& ctx, bool chat) {
   }
   req.stop = std::get<std::vector<std::string>>(std::move(stops));
 
-  auto prompt = chat ? chat_prompt(body, ctx) : text_prompt(body, ctx);
-  if (std::holds_alternative<ApiError>(prompt)) {
-    return std::get<ApiError>(prompt);
+  if (chat) {
+    auto prompt = chat_prompt(body, ctx);
+    if (std::holds_alternative<ApiError>(prompt)) {
+      return std::get<ApiError>(prompt);
+    }
+    req.prompt = std::move(std::get<ChatPrompt>(prompt).tokens);
+    req.gen.keep = std::get<ChatPrompt>(prompt).keep;
+  } else {
+    auto prompt = text_prompt(body, ctx);
+    if (std::holds_alternative<ApiError>(prompt)) {
+      return std::get<ApiError>(prompt);
+    }
+    req.prompt = std::get<std::vector<std::int32_t>>(std::move(prompt));
   }
-  req.prompt = std::get<std::vector<std::int32_t>>(std::move(prompt));
+  req.gen.context_shift = ctx.context_shift;
   if (req.prompt.size() >= ctx.max_ctx) {
     return ApiError{.status = 413,
                     .type = "invalid_request_error",
@@ -350,8 +376,9 @@ ParseResult parse_request(const json& body, const Context& ctx, bool chat) {
                                            req.prompt.size(), ctx.max_ctx),
                     .param = chat ? "messages" : "prompt"};
   }
+  // With a context shift the completion is not bounded by the room the prompt leaves.
   const auto room = static_cast<int>(ctx.max_ctx - req.prompt.size());
-  req.gen.max_tokens = std::min(max_tokens, room);
+  req.gen.max_tokens = ctx.context_shift ? max_tokens : std::min(max_tokens, room);
   return req;
 }
 

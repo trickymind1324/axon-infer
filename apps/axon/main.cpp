@@ -9,6 +9,7 @@
 #include "chat/template.h"
 #include "engine/bench.h"
 #include "engine/engine.h"
+#include "engine/speculate.h"
 #include "kernels/kernels.h"
 #include "model/llama.h"
 
@@ -164,14 +165,70 @@ void add_sampling_options(CLI::App& cmd, SamplingCli& s, float default_temperatu
 }
 
 std::string stats_line(const axon::engine::Stats& s) {
-  return fmt::format("prompt {} tokens ({} reused), first token in {:.2f} s, decode {} tokens "
-                     "in {:.2f} s ({:.2f} tok/s), cache {} positions ({:.1f} MB of {:.1f} MB), "
-                     "peak rss {:.0f} MB, seed {}",
-                     s.prompt_tokens, s.reused_tokens, s.prefill_s, s.generated_tokens, s.decode_s,
-                     s.decode_tok_s(), s.cache_positions,
-                     static_cast<double>(s.cache_bytes_live) / (1024.0 * 1024.0),
-                     static_cast<double>(s.cache_bytes_reserved) / (1024.0 * 1024.0), s.peak_rss_mb,
-                     s.seed);
+  return fmt::format(
+      "prompt {} tokens ({} reused), first token in {:.2f} s, decode {} tokens "
+      "in {:.2f} s ({:.2f} tok/s), cache {} positions ({:.1f} MB of {:.1f} MB), "
+      "peak rss {:.0f} MB, seed {}{}",
+      s.prompt_tokens, s.reused_tokens, s.prefill_s, s.generated_tokens, s.decode_s,
+      s.decode_tok_s(), s.cache_positions,
+      static_cast<double>(s.cache_bytes_live) / (1024.0 * 1024.0),
+      static_cast<double>(s.cache_bytes_reserved) / (1024.0 * 1024.0), s.peak_rss_mb, s.seed,
+      s.context_shifts > 0 ? fmt::format(", context shifted {} times", s.context_shifts) : "");
+}
+
+// A draft model loaded beside the target with the same context, threads, kernel table and
+// cache type, and the speculator over the pair. Null when no draft was asked for.
+struct Draft {
+  std::unique_ptr<axon::model::LlamaModel> model;
+  std::unique_ptr<axon::engine::Speculator> speculator;
+  std::string name;
+};
+
+std::optional<Draft> load_draft(const std::string& path, std::size_t draft_tokens,
+                                const axon::model::LlamaModel& target,
+                                const axon::model::LoadOptions& like) {
+  if (path.empty()) {
+    return std::nullopt;
+  }
+  auto loaded = axon::model::LlamaModel::load(path, like);
+  if (!loaded) {
+    fmt::print(stderr, "error: draft: {}\n", loaded.error().message);
+    return std::nullopt;
+  }
+  const auto ok = axon::engine::Speculator::compatible(**loaded, target);
+  if (!ok) {
+    fmt::print(stderr, "error: {}\n", ok.error().message);
+    return std::nullopt;
+  }
+  Draft draft;
+  draft.model = std::move(*loaded);
+  draft.name = std::filesystem::path(path).stem().string();
+  draft.speculator = std::make_unique<axon::engine::Speculator>(
+      *draft.model, target, axon::engine::SpeculateOptions{.draft_tokens = draft_tokens});
+  return draft;
+}
+
+std::string speculation_line(const axon::engine::SpeculateStats& s) {
+  return fmt::format("speculation: {} rounds, {} drafted, {:.1f}% accepted, {:.2f} tokens per "
+                     "target pass",
+                     s.rounds, s.drafted, 100.0 * s.acceptance(), s.tokens_per_pass());
+}
+
+// The tokens a rendered system message occupies at the front of a prompt: the longest prefix
+// the system-only rendering shares with the full prompt's tokens, which is what a context
+// shift keeps.
+std::size_t system_prefix(const axon::chat::ChatTemplate& tmpl, const axon::Tokenizer& tokenizer,
+                          const std::string& system, std::span<const std::int32_t> prompt) {
+  if (system.empty()) {
+    return 0;
+  }
+  const std::vector<axon::chat::Message> only{{.role = "system", .content = system}};
+  const auto ids = tokenizer.encode(tmpl.render(only, false), {.parse_special = true});
+  std::size_t n = 0;
+  while (n < ids.size() && n < prompt.size() && ids[n] == prompt[n]) {
+    ++n;
+  }
+  return n;
 }
 
 // Encodes prompt text for the model. The template may already spell out the BOS token (Llama 3
@@ -200,6 +257,10 @@ struct GenerateCli {
   bool no_bos = false;
   bool stats = false;
   SamplingCli sampling;
+  std::string draft;
+  std::size_t draft_tokens = 4;
+  bool ctx_shift = false;
+  std::size_t keep = 0;
   std::size_t dump_layer = axon::model::ForwardOptions::kNoDump;
   std::string dump_dir = "dump-axon";
 };
@@ -285,18 +346,37 @@ int run_generate(const GenerateCli& opt) {
     return generate_without_cache(model, ids, opt);
   }
 
+  const axon::model::LoadOptions like{.max_seq = std::min(opt.max_seq, ctx),
+                                      .max_ctx = ctx,
+                                      .n_threads = opt.threads,
+                                      .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                                                  : axon::kernels::KernelSet::Auto,
+                                      .cache = opt.cache == "f16" ? axon::model::CacheType::F16
+                                                                  : axon::model::CacheType::F32};
+  auto draft = load_draft(opt.draft, opt.draft_tokens, model, like);
+  if (!opt.draft.empty() && !draft) {
+    return 2;
+  }
   axon::engine::Engine engine(model);
   axon::engine::GenerateOptions options;
   options.max_tokens = opt.n_tokens;
   options.sampler = opt.sampling.config();
-  const auto out = engine.generate(ids, options, [](std::string_view piece) {
-    fmt::print("{}", piece);
-    std::fflush(stdout);
-  });
+  options.context_shift = opt.ctx_shift;
+  options.keep = opt.keep;
+  const auto out = engine.generate(
+      ids, options,
+      [](std::string_view piece) {
+        fmt::print("{}", piece);
+        std::fflush(stdout);
+      },
+      draft ? draft->speculator.get() : nullptr);
   fmt::print("\n");
   if (!out) {
     fmt::print(stderr, "error: {}\n", out.error().message);
     return 2;
+  }
+  if (draft && opt.stats) {
+    fmt::print("[{}]\n", speculation_line(draft->speculator->stats()));
   }
   const auto& s = engine.stats();
   fmt::print("{}\n", stats_line(s));
@@ -320,6 +400,9 @@ struct ChatCli {
   std::string cache = "f32";
   bool stats = false;
   SamplingCli sampling;
+  std::string draft;
+  std::size_t draft_tokens = 4;
+  bool ctx_shift = false;
 };
 
 int run_chat(const ChatCli& opt) {
@@ -339,10 +422,22 @@ int run_chat(const ChatCli& opt) {
   auto& model = **loaded;
   const auto& tokenizer = model.tokenizer();
   const auto tmpl = axon::chat::ChatTemplate::from_tokenizer(tokenizer);
+  const axon::model::LoadOptions like{.max_seq = std::min(opt.max_seq, opt.ctx),
+                                      .max_ctx = opt.ctx,
+                                      .n_threads = opt.threads,
+                                      .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                                                  : axon::kernels::KernelSet::Auto,
+                                      .cache = opt.cache == "f16" ? axon::model::CacheType::F16
+                                                                  : axon::model::CacheType::F32};
+  auto draft = load_draft(opt.draft, opt.draft_tokens, model, like);
+  if (!opt.draft.empty() && !draft) {
+    return 2;
+  }
   axon::engine::Engine engine(model);
   axon::engine::GenerateOptions options;
   options.max_tokens = opt.max_tokens;
   options.sampler = opt.sampling.config();
+  options.context_shift = opt.ctx_shift;
   const auto load_s =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_load).count();
 
@@ -394,12 +489,16 @@ int run_chat(const ChatCli& opt) {
     messages.push_back({.role = "user", .content = line});
     const std::string prompt = tmpl.render(messages, true);
     const auto ids = encode_prompt(tokenizer, prompt, false);
+    options.keep = opt.ctx_shift ? system_prefix(tmpl, tokenizer, opt.system, ids) : 0;
     std::string reply;
-    const auto out = engine.generate(ids, options, [&](std::string_view piece) {
-      reply.append(piece);
-      fmt::print("{}", piece);
-      std::fflush(stdout);
-    });
+    const auto out = engine.generate(
+        ids, options,
+        [&](std::string_view piece) {
+          reply.append(piece);
+          fmt::print("{}", piece);
+          std::fflush(stdout);
+        },
+        draft ? draft->speculator.get() : nullptr);
     fmt::print("\n");
     if (!out) {
       fmt::print("(cannot continue: {}. Use /clear to start over or raise --ctx.)\n",
@@ -434,6 +533,8 @@ struct BenchCli {
   bool force_scalar = false;
   std::string cache = "f32";
   std::size_t batch = 1;
+  std::string draft;
+  std::size_t draft_tokens = 4;
   bool json = false;
   bool profile = false;
 };
@@ -476,6 +577,22 @@ int run_bench(const BenchCli& opt) {
     fmt::print("prompt {} tokens, generate {}, {} runs after one warm-up, batch of {}\n",
                ids.size(), opt.generate, opt.runs, opt.batch);
   }
+  const axon::model::LoadOptions like{.max_seq = std::min(opt.max_seq, opt.ctx),
+                                      .max_ctx = opt.ctx,
+                                      .n_threads = opt.threads,
+                                      .kernels = opt.force_scalar ? axon::kernels::KernelSet::Scalar
+                                                                  : axon::kernels::KernelSet::Auto,
+                                      .spin_budget_us = opt.spin_budget_us,
+                                      .cache = opt.cache == "f16" ? axon::model::CacheType::F16
+                                                                  : axon::model::CacheType::F32};
+  auto draft = load_draft(opt.draft, opt.draft_tokens, model, like);
+  if (!opt.draft.empty() && !draft) {
+    return 2;
+  }
+  if (draft && !opt.json) {
+    fmt::print("draft: {} ({}), {} tokens per round\n", draft->model->file().model_name(),
+               draft->model->config().describe(), draft->speculator->draft_tokens());
+  }
   const auto result = axon::engine::run_benchmark(
       model, ids, {.generate = opt.generate, .runs = opt.runs, .batch = opt.batch},
       [&](const axon::engine::BenchRun& run, int index) {
@@ -487,7 +604,8 @@ int run_bench(const BenchCli& opt) {
                      streams * static_cast<double>(opt.generate) / run.decode_s);
           std::fflush(stdout);
         }
-      });
+      },
+      draft ? draft->speculator.get() : nullptr, draft ? draft->name : std::string_view{});
   if (!result) {
     fmt::print(stderr, "error: {}\n", result.error().message);
     return 2;
@@ -506,6 +624,9 @@ int run_bench(const BenchCli& opt) {
         static_cast<double>(result->weight_bytes_per_token) / 1e6,
         result->cache_bytes_per_token / 1e6, result->weight_gb_s_median, result->peak_rss_mb,
         result->load_average_before, result->load_average_after);
+    if (draft) {
+      fmt::print("{}\n", speculation_line(draft->speculator->stats()));
+    }
   }
   if (opt.profile) {
     const auto report = axon::engine::profile_forward(model, ids);
@@ -552,6 +673,14 @@ int run(int argc, char** argv) {
   gen->add_option("--threads,-t", generate.threads,
                   "threads for the forward pass, 0 for one per core")
       ->default_val(0);
+  gen->add_option("--draft", generate.draft,
+                  "a smaller model of the same vocabulary to draft with");
+  gen->add_option("--draft-tokens", generate.draft_tokens, "tokens the draft proposes per round")
+      ->default_val(4);
+  gen->add_flag("--ctx-shift", generate.ctx_shift,
+                "when the context fills, drop the oldest tokens after --keep and carry on");
+  gen->add_option("--keep", generate.keep, "tokens kept at the front across a context shift")
+      ->default_val(0);
   gen->add_flag("--force-scalar", generate.force_scalar,
                 "use the scalar reference kernels instead of the best the CPU supports");
   gen->add_option("--cache", generate.cache, "key/value cache storage, f32 or f16")
@@ -578,6 +707,12 @@ int run(int argc, char** argv) {
   ch->add_flag("--force-scalar", chat.force_scalar,
                "use the scalar reference kernels instead of the best the CPU supports");
   ch->add_option("--cache", chat.cache, "key/value cache storage, f32 or f16")->default_str("f32");
+  ch->add_option("--draft", chat.draft, "a smaller model of the same vocabulary to draft with");
+  ch->add_option("--draft-tokens", chat.draft_tokens, "tokens the draft proposes per round")
+      ->default_val(4);
+  ch->add_flag(
+      "--ctx-shift", chat.ctx_shift,
+      "when the context fills, keep the system prompt, drop the oldest turns and carry on");
   ch->add_flag("--stats", chat.stats, "print timing and memory after every reply");
   add_sampling_options(*ch, chat.sampling, 0.8F, 1.1F);
 
@@ -601,6 +736,9 @@ int run(int argc, char** argv) {
   be->add_option("--spin-budget-us", bench.spin_budget_us,
                  "microseconds an idle worker spins before sleeping")
       ->default_val(axon::ThreadPoolOptions::kDefaultSpinBudgetUs);
+  be->add_option("--draft", bench.draft, "a smaller model of the same vocabulary to draft with");
+  be->add_option("--draft-tokens", bench.draft_tokens, "tokens the draft proposes per round")
+      ->default_val(4);
   be->add_option("--batch", bench.batch,
                  "copies of the prompt decoded together, the rates then count every stream")
       ->default_val(1);

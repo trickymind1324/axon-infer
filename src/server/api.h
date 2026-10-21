@@ -27,6 +27,9 @@ struct Context {
   std::string served_name;
   int default_max_tokens = 512;
   std::size_t max_ctx = 0;
+  // Generations shift the context instead of ending with length when it fills, keeping the
+  // rendered system message of a chat request.
+  bool context_shift = false;
 };
 
 // An error in the OpenAI shape with the status it travels under.

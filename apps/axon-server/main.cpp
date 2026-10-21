@@ -7,6 +7,7 @@
 #include "core/log.h"
 #include "core/threadpool.h"
 
+#include "engine/speculate.h"
 #include "kernels/kernels.h"
 #include "model/llama.h"
 #include "server/http.h"
@@ -22,6 +23,7 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
 
@@ -57,6 +59,9 @@ struct Cli {
   std::size_t max_batch = 4;
   std::string api_key;
   std::string served_name;
+  std::string draft;
+  std::size_t draft_tokens = 4;
+  bool ctx_shift = false;
   std::string log_level = "info";
 };
 
@@ -93,6 +98,13 @@ int run(int argc, char** argv) {
                  "when set, /v1 requests need 'Authorization: Bearer <key>'");
   app.add_option("--served-name", opt.served_name,
                  "the model id reported by /v1/models (default: the file's stem)");
+  app.add_option("--draft", opt.draft,
+                 "a smaller model of the same vocabulary to draft with when one client decodes");
+  app.add_option("--draft-tokens", opt.draft_tokens, "tokens the draft proposes per round")
+      ->default_val(4);
+  app.add_flag("--ctx-shift", opt.ctx_shift,
+               "when a completion fills the context, keep the system message, drop the oldest "
+               "tokens and carry on");
   app.add_option("--log-level", opt.log_level, "trace|debug|info|warn|error|off")
       ->default_str("info");
   CLI11_PARSE(app, argc, argv);
@@ -127,6 +139,27 @@ int run(int argc, char** argv) {
     return 2;
   }
   auto& model = **loaded;
+  std::unique_ptr<axon::model::LlamaModel> draft;
+  if (!opt.draft.empty()) {
+    auto d = axon::model::LlamaModel::load(
+        opt.draft,
+        {.max_seq = std::min(opt.max_seq, opt.ctx),
+         .max_ctx = opt.ctx,
+         .n_threads = opt.threads,
+         .kernels =
+             opt.force_scalar ? axon::kernels::KernelSet::Scalar : axon::kernels::KernelSet::Auto,
+         .cache = opt.cache == "f16" ? axon::model::CacheType::F16 : axon::model::CacheType::F32});
+    if (!d) {
+      fmt::print(stderr, "error: draft: {}\n", d.error().message);
+      return 2;
+    }
+    const auto ok = axon::engine::Speculator::compatible(**d, model);
+    if (!ok) {
+      fmt::print(stderr, "error: {}\n", ok.error().message);
+      return 2;
+    }
+    draft = std::move(*d);
+  }
   const auto load_s =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - t_load).count();
 
@@ -135,11 +168,13 @@ int run(int argc, char** argv) {
       .port = opt.port,
       .max_queue = opt.max_queue,
       .max_batch = opt.max_batch,
+      .context_shift = opt.ctx_shift,
+      .draft_tokens = opt.draft_tokens,
       .api_key = opt.api_key,
       .served_name = opt.served_name.empty() ? std::filesystem::path(opt.model).stem().string()
                                              : opt.served_name,
       .default_max_tokens = opt.max_tokens};
-  axon::server::HttpServer server(model, options);
+  axon::server::HttpServer server(model, options, draft.get());
   if (!server.start()) {
     fmt::print(stderr, "error: cannot listen on {}:{}\n", opt.host, opt.port);
     return 2;
@@ -147,10 +182,14 @@ int run(int argc, char** argv) {
   fmt::print("model: {} ({}), loaded in {:.2f} s, {} threads, {} kernels, context {}, {} cache\n",
              model.file().model_name(), model.config().describe(), load_s, model.n_threads(),
              axon::kernels::name(model.table()), model.max_ctx(), opt.cache);
-  fmt::print("serving '{}' at http://{}:{}/v1 ({}), up to {} sequences at once, queue of {}\n",
+  fmt::print("serving '{}' at http://{}:{}/v1 ({}), up to {} sequences at once, queue of {}{}{}\n",
              server.served_name(), opt.host, server.port(),
              opt.api_key.empty() ? "no authentication" : "bearer token required", opt.max_batch,
-             opt.max_queue);
+             opt.max_queue,
+             draft ? fmt::format(", drafting with {} ({} tokens per round)",
+                                 draft->file().model_name(), opt.draft_tokens)
+                   : "",
+             opt.ctx_shift ? ", context shift on" : "");
   std::fflush(stdout);
 
   std::signal(SIGINT, on_signal);

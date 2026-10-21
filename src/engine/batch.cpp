@@ -83,6 +83,33 @@ Expected<std::size_t> BatchEngine::step() {
       return chunk.error();
     }
   }
+  // One sequence in decode and a draft at hand: a speculative round instead of a step.
+  if (speculator_ != nullptr) {
+    std::optional<SlotId> only;
+    std::size_t decoding = 0;
+    for (SlotId i = 0; i < sequences_.size(); ++i) {
+      if (sequences_[i]->state() == Sequence::State::Decode) {
+        ++decoding;
+        only = i;
+      }
+    }
+    if (decoding == 1 && only.has_value()) {
+      const SlotId id = only.value();
+      const auto round = speculator_->round(*sequences_[id]);
+      if (!round) {
+        sequences_[id]->abandon();
+        slots_[id].done = {};
+        return round.error();
+      }
+      ++speculative_rounds_;
+      ++decode_steps_;
+      if (sequences_[id]->state() == Sequence::State::Done) {
+        finish(id);
+        ++finished;
+      }
+      return finished;
+    }
+  }
   // One decode step for everyone in decode: apply the end rules, batch the survivors.
   caches_.clear();
   tokens_.clear();

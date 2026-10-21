@@ -10,6 +10,7 @@
 
 #include "engine/options.h"
 #include "engine/sequence.h"
+#include "engine/speculate.h"
 #include "model/llama.h"
 
 #include <cstddef>
@@ -47,6 +48,10 @@ public:
   [[nodiscard]] const Sequence& sequence(SlotId id) const { return *sequences_[id]; }
   // Decode steps that advanced more than one sequence, for tests and the stats line.
   [[nodiscard]] std::uint64_t batched_steps() const noexcept { return batched_steps_; }
+  // With a speculator, a step with exactly one sequence in decode runs a speculative round
+  // on it, and a step with more runs the batched pass as usual.
+  void set_speculator(Speculator* speculator) noexcept { speculator_ = speculator; }
+  [[nodiscard]] std::uint64_t speculative_rounds() const noexcept { return speculative_rounds_; }
   [[nodiscard]] std::uint64_t decode_steps() const noexcept { return decode_steps_; }
 
 private:
@@ -62,6 +67,8 @@ private:
   std::uint64_t admissions_ = 0;
   std::uint64_t batched_steps_ = 0;
   std::uint64_t decode_steps_ = 0;
+  std::uint64_t speculative_rounds_ = 0;
+  Speculator* speculator_ = nullptr;
   // Scratch for a step, kept across calls so a step allocates nothing.
   std::vector<model::KVCache*> caches_;
   std::vector<std::int32_t> tokens_;

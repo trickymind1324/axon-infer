@@ -22,15 +22,19 @@ struct ServerOptions {
   std::string host = "127.0.0.1";
   int port = 8080;  // 0 picks a free port, read back with port()
   std::size_t max_queue = 16;
-  std::size_t max_batch = 4;  // sequences decoded together, capped by the model's max_batch
-  std::string api_key;        // empty means no authentication
-  std::string served_name;    // empty means the model file's stem
+  std::size_t max_batch = 4;   // sequences decoded together, capped by the model's max_batch
+  bool context_shift = false;  // shift the context instead of ending with length
+  std::size_t draft_tokens = 4;
+  std::string api_key;      // empty means no authentication
+  std::string served_name;  // empty means the model file's stem
   int default_max_tokens = 512;
 };
 
 class HttpServer {
 public:
-  HttpServer(model::LlamaModel& model, ServerOptions options);
+  // With a draft model (same vocabulary, loaded like the target), a single decoding sequence
+  // runs speculative rounds and several run the batched pass.
+  HttpServer(model::LlamaModel& model, ServerOptions options, model::LlamaModel* draft = nullptr);
   ~HttpServer();
   HttpServer(const HttpServer&) = delete;
   HttpServer& operator=(const HttpServer&) = delete;
@@ -52,6 +56,7 @@ private:
   chat::ChatTemplate template_;
   Context context_;
   engine::BatchEngine batch_;
+  std::unique_ptr<engine::Speculator> speculator_;
   std::unique_ptr<Worker> worker_;
   std::unique_ptr<Impl> impl_;
   std::thread thread_;

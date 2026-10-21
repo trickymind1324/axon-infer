@@ -90,7 +90,12 @@ Expected<BenchRun> run_batched(model::LlamaModel& model, std::span<const std::in
 
 Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const std::int32_t> prompt,
                                     const BenchOptions& opts,
-                                    const std::function<void(const BenchRun&, int)>& progress) {
+                                    const std::function<void(const BenchRun&, int)>& progress,
+                                    Speculator* speculator, std::string_view draft_name) {
+  if (speculator != nullptr && opts.batch > 1) {
+    return make_error(ErrorCode::InvalidArgument,
+                      "benchmark: speculative decoding runs one stream, not a batch");
+  }
   if (opts.generate < 1 || opts.runs < 1) {
     return make_error(ErrorCode::InvalidArgument,
                       "benchmark: generate and runs must be at least 1");
@@ -132,7 +137,7 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
     BenchRun measured{};
     if (result.batch == 1) {
       engine.clear();  // a fresh cache every run, so prefill is always measured
-      auto out = engine.generate(prompt, gen, nullptr);
+      auto out = engine.generate(prompt, gen, nullptr, speculator);
       if (!out) {
         return out.error();
       }
@@ -159,6 +164,12 @@ Expected<BenchResult> run_benchmark(model::LlamaModel& model, std::span<const st
     }
   }
   result.load_average_after = load_average();
+  if (speculator != nullptr) {
+    result.draft = std::string(draft_name);
+    result.draft_tokens = speculator->draft_tokens();
+    result.acceptance = speculator->stats().acceptance();
+    result.tokens_per_pass = speculator->stats().tokens_per_pass();
+  }
   {
     // One more decoded token on its own, to count the launches a decode step issues.
     engine.clear();
@@ -288,12 +299,13 @@ std::string bench_json(const BenchResult& r, std::string_view model_file,
         i == 0 ? "" : ", ", r.runs[i].prefill_s, r.runs[i].decode_s, r.runs[i].peak_rss_mb);
   }
   return fmt::format(
-      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "cache": "{}", "threads": {}, "context": {}, "batch": {}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
-      model_file, description, r.kernels, r.cache, r.threads, r.context, r.batch, r.spin_budget_us,
-      r.launches_per_token, r.prompt_tokens, r.generated_tokens, r.runs.size(),
-      r.prefill_tok_s_median, r.prefill_tok_s_best, r.decode_tok_s_median, r.decode_tok_s_best,
-      r.weight_bytes_per_token, r.cache_bytes_per_token, r.weight_gb_s_median, r.peak_rss_mb,
-      r.load_average_before, r.load_average_after, runs);
+      R"json({{"model_file": "{}", "model": "{}", "kernels": "{}", "cache": "{}", "threads": {}, "context": {}, "batch": {}, "draft": "{}", "draft_tokens": {}, "acceptance": {:.4f}, "tokens_per_pass": {:.3f}, "spin_budget_us": {}, "launches_per_token": {:.1f}, "prompt_tokens": {}, "generated_tokens": {}, "runs": {}, "prefill_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "decode_tok_s": {{"median": {:.3f}, "best": {:.3f}}}, "weight_bytes_per_token": {}, "cache_bytes_per_token": {:.0f}, "weight_gb_s": {:.3f}, "peak_rss_mb": {:.1f}, "load_average": {{"before": {:.2f}, "after": {:.2f}}}, "measurements": [{}]}})json",
+      model_file, description, r.kernels, r.cache, r.threads, r.context, r.batch, r.draft,
+      r.draft_tokens, r.acceptance, r.tokens_per_pass, r.spin_budget_us, r.launches_per_token,
+      r.prompt_tokens, r.generated_tokens, r.runs.size(), r.prefill_tok_s_median,
+      r.prefill_tok_s_best, r.decode_tok_s_median, r.decode_tok_s_best, r.weight_bytes_per_token,
+      r.cache_bytes_per_token, r.weight_gb_s_median, r.peak_rss_mb, r.load_average_before,
+      r.load_average_after, runs);
 }
 
 }  // namespace axon::engine

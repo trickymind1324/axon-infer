@@ -160,15 +160,24 @@ namespace {
 
 struct Served {
   std::unique_ptr<axon::model::LlamaModel> model;
+  std::unique_ptr<axon::model::LlamaModel> draft;
   std::unique_ptr<axon::server::HttpServer> server;
-  explicit Served(axon::server::ServerOptions options = {}, std::size_t max_batch = 1)
+  explicit Served(axon::server::ServerOptions options = {}, std::size_t max_batch = 1,
+                  bool with_draft = false)
       : model(load(max_batch)) {
     options.port = 0;
     if (options.served_name.empty()) {
       options.served_name = "synthetic";
     }
     options.default_max_tokens = 6;
-    server = std::make_unique<axon::server::HttpServer>(*model, options);
+    if (with_draft) {
+      auto d =
+          axon::model::LlamaModel::load(axon::test::fixture_path("gguf/synthetic-2l-q4_0.gguf"),
+                                        {.max_seq = 8, .max_ctx = 64, .n_threads = 2});
+      REQUIRE(d);
+      draft = std::move(*d);
+    }
+    server = std::make_unique<axon::server::HttpServer>(*model, options, draft.get());
     REQUIRE(server->start());
   }
   httplib::Client client() const {
@@ -444,6 +453,62 @@ TEST_CASE("several clients decode together and each gets the answer it gets alon
   CHECK(health["requests"] == 8);
   // Four clients within a few milliseconds on a 2-layer model: at least one step batched them.
   CHECK(health["batched_steps"].get<int>() > 0);
+}
+
+TEST_CASE("a draft gives the same completion and a shift runs past the room",
+          "[server][http][speculate][shift]") {
+  const json request = {{"prompt", "hello"}, {"max_tokens", 20}, {"temperature", 0}};
+  std::string plain;
+  {
+    Served s;
+    plain = body_of(s.client().Post("/v1/completions", request.dump(),
+                                    "application/json"))["choices"][0]["text"];
+  }
+  {
+    Served s({}, 1, true);
+    auto cli = s.client();
+    const auto body = body_of(cli.Post("/v1/completions", request.dump(), "application/json"));
+    CHECK(body["choices"][0]["text"] == plain);
+    CHECK(body["usage"]["completion_tokens"] == 20);
+    // Streaming through the speculator too.
+    json streamed = request;
+    streamed["stream"] = true;
+    auto r = cli.Post("/v1/completions", streamed.dump(), "application/json");
+    REQUIRE(r);
+    bool saw_done = false;
+    std::string text;
+    for (const auto& chunk : events(r->body, &saw_done)) {
+      text += chunk["choices"][0]["text"].get<std::string>();
+    }
+    CHECK(text == plain);
+    CHECK(saw_done);
+  }
+  {
+    // Without the shift the context of 64 caps the completion, with it the request's length
+    // is honoured and the completion ends with length at max_tokens.
+    axon::server::ServerOptions shifting;
+    shifting.context_shift = true;
+    Served s(shifting);
+    auto cli = s.client();
+    const json long_request = {{"prompt", "hello"}, {"max_tokens", 150}, {"temperature", 0}};
+    const auto body = body_of(cli.Post("/v1/completions", long_request.dump(), "application/json"));
+    CHECK(body["choices"][0]["finish_reason"] == "length");
+    CHECK(body["usage"]["completion_tokens"] == 150);
+    // A chat request keeps its system message as the shift's prefix.
+    const json chat = {{"messages", json::array({{{"role", "system"}, {"content", "Be brief."}},
+                                                 {{"role", "user"}, {"content", "hello"}}})},
+                       {"max_tokens", 120},
+                       {"temperature", 0}};
+    const auto reply = body_of(cli.Post("/v1/chat/completions", chat.dump(), "application/json"));
+    CHECK(reply["usage"]["completion_tokens"] == 120);
+  }
+  {
+    Served s;
+    const json long_request = {{"prompt", "hello"}, {"max_tokens", 150}, {"temperature", 0}};
+    const auto body =
+        body_of(s.client().Post("/v1/completions", long_request.dump(), "application/json"));
+    CHECK(body["usage"]["completion_tokens"].get<int>() < 64);
+  }
 }
 
 #endif

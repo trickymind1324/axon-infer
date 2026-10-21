@@ -99,7 +99,7 @@ struct HttpServer::Impl {
   httplib::Server server;
 };
 
-HttpServer::HttpServer(model::LlamaModel& model, ServerOptions options)
+HttpServer::HttpServer(model::LlamaModel& model, ServerOptions options, model::LlamaModel* draft)
     : options_(std::move(options)),
       template_(chat::ChatTemplate::from_tokenizer(model.tokenizer())),
       batch_(model, std::max<std::size_t>(1, options_.max_batch)), impl_(std::make_unique<Impl>()) {
@@ -110,7 +110,13 @@ HttpServer::HttpServer(model::LlamaModel& model, ServerOptions options)
                      .chat_template = &template_,
                      .served_name = options_.served_name,
                      .default_max_tokens = options_.default_max_tokens,
-                     .max_ctx = model.max_ctx()};
+                     .max_ctx = model.max_ctx(),
+                     .context_shift = options_.context_shift};
+  if (draft != nullptr) {
+    speculator_ = std::make_unique<engine::Speculator>(
+        *draft, model, engine::SpeculateOptions{.draft_tokens = options_.draft_tokens});
+    batch_.set_speculator(speculator_.get());
+  }
   options_.max_batch = batch_.slots();
   worker_ = std::make_unique<Worker>(batch_, options_.max_queue);
   routes();
