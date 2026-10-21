@@ -1,5 +1,7 @@
 #include "engine/engine.h"
 
+#include "engine/speculate.h"
+
 #include <utility>
 
 namespace axon::engine {
@@ -24,7 +26,7 @@ void Engine::clear() {
 // accepted token through forward_one and sample the next, until a rule ends it.
 Expected<std::vector<std::int32_t>>
 Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& opts,
-                 const std::function<void(std::string_view)>& on_text) {
+                 const std::function<void(std::string_view)>& on_text, Speculator* speculator) {
   const auto started = sequence_.start(prompt, opts, on_text);
   if (!started) {
     return started.error();
@@ -36,6 +38,15 @@ Engine::generate(std::span<const std::int32_t> prompt, const GenerateOptions& op
     }
   }
   const std::size_t n_vocab = model_.config().n_vocab;
+  if (speculator != nullptr) {
+    while (sequence_.state() == Sequence::State::Decode) {
+      const auto round = speculator->round(sequence_);
+      if (!round) {
+        return round.error();
+      }
+    }
+    return std::vector<std::int32_t>(sequence_.generated().begin(), sequence_.generated().end());
+  }
   while (sequence_.accept_pending()) {
     const std::int32_t token = sequence_.pending();
     sequence_.fed();

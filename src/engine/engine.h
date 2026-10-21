@@ -18,6 +18,8 @@
 
 namespace axon::engine {
 
+class Speculator;
+
 class Engine {
 public:
   explicit Engine(model::LlamaModel& model);
@@ -26,9 +28,12 @@ public:
   // as soon as it is complete. Returns the generated ids. A stop token or a full context ends
   // generation early and is reported in stats(). Fails only when the prompt itself cannot be
   // processed, for example because it does not fit the context.
-  Expected<std::vector<std::int32_t>>
-  generate(std::span<const std::int32_t> prompt, const GenerateOptions& opts,
-           const std::function<void(std::string_view)>& on_text);
+  // With a speculator the decode loop runs its rounds instead of single steps: the same
+  // text with greedy sampling, token for token, and the same distribution otherwise.
+  Expected<std::vector<std::int32_t>> generate(std::span<const std::int32_t> prompt,
+                                               const GenerateOptions& opts,
+                                               const std::function<void(std::string_view)>& on_text,
+                                               Speculator* speculator = nullptr);
 
   void clear();  // forgets the cache and history
   [[nodiscard]] const Stats& stats() const noexcept { return sequence_.stats(); }

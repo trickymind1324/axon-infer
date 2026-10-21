@@ -52,7 +52,13 @@ public:
   // fed, false when the generation ended (the text is flushed and the state is Done).
   bool accept_pending();
   [[nodiscard]] std::int32_t pending() const noexcept { return next_; }
+  // Decode: replaces the pending token, for a speculator that chose it from the target's
+  // distribution instead of observe().
+  void set_pending(std::int32_t token) noexcept { next_ = token; }
   [[nodiscard]] model::KVCache& cache() noexcept { return cache_; }
+  [[nodiscard]] model::LlamaModel& model() noexcept { return model_; }
+  // The sampler of the generation in progress, valid from start() on.
+  [[nodiscard]] Sampler& sampler() noexcept { return *sampler_; }
   // Decode: the accepted token was fed and the cache holds it. Then observe() the logits.
   void fed();
   void observe(std::span<const float> logits_row);

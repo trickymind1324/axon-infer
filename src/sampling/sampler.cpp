@@ -204,6 +204,10 @@ void Sampler::distribution(std::span<const float> logits, std::span<const std::i
   }
 }
 
+double Sampler::uniform() {
+  return impl_->rng.uniform();
+}
+
 std::int32_t Sampler::draw(std::span<const float> probabilities) {
   Impl& s = *impl_;
   const auto n = static_cast<std::size_t>(s.n_vocab);

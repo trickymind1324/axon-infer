@@ -43,6 +43,8 @@ public:
   // this sampler's generator, scanning the support from the largest probability down, which
   // is the order sample() scans its candidates in.
   std::int32_t draw(std::span<const float> probabilities);
+  // One uniform in [0, 1) from this sampler's generator.
+  double uniform();
 
   void reset(std::uint64_t seed);
   [[nodiscard]] std::uint64_t seed() const noexcept;
