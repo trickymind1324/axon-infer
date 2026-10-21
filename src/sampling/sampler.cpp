@@ -63,7 +63,11 @@ const SamplerConfig& Sampler::config() const noexcept {
   return impl_->config;
 }
 
-std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std::int32_t> recent) {
+// Runs every stage but the draw. Leaves the kept candidates in s.order[0, kept) in descending
+// order with their probabilities in s.probs, unnormalised over the kept set. With temperature
+// zero returns the argmax in `greedy` and kept zero.
+std::size_t Sampler::prepare(std::span<const float> logits, std::span<const std::int32_t> recent,
+                             std::int32_t& greedy) {
   Impl& s = *impl_;
   const SamplerConfig& c = s.config;
   const auto n = static_cast<std::size_t>(s.n_vocab);
@@ -94,7 +98,8 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
   }
 
   if (c.temperature <= 0.0F) {
-    return static_cast<std::int32_t>(std::ranges::max_element(s.logits) - s.logits.begin());
+    greedy = static_cast<std::int32_t>(std::ranges::max_element(s.logits) - s.logits.begin());
+    return 0;
   }
 
   // Candidates sorted by logit, descending. Top-k needs only the first k in order.
@@ -152,7 +157,16 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
     }
     kept = cut;
   }
+  return kept;
+}
 
+std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std::int32_t> recent) {
+  Impl& s = *impl_;
+  std::int32_t greedy = 0;
+  const std::size_t kept = prepare(logits, recent, greedy);
+  if (kept == 0) {
+    return greedy;
+  }
   double remaining = 0.0;
   for (std::size_t i = 0; i < kept; ++i) {
     remaining += s.probs[i];
@@ -166,6 +180,59 @@ std::int32_t Sampler::sample(std::span<const float> logits, std::span<const std:
     }
   }
   return s.order[kept - 1];  // rounding at the very top of the range
+}
+
+void Sampler::distribution(std::span<const float> logits, std::span<const std::int32_t> recent,
+                           std::span<float> out) {
+  Impl& s = *impl_;
+  const auto n = static_cast<std::size_t>(s.n_vocab);
+  AXON_CHECK(out.size() == n, "Sampler: expected room for {} probabilities, found {}", n,
+             out.size());
+  std::ranges::fill(out, 0.0F);
+  std::int32_t greedy = 0;
+  const std::size_t kept = prepare(logits, recent, greedy);
+  if (kept == 0) {
+    out[static_cast<std::size_t>(greedy)] = 1.0F;
+    return;
+  }
+  double remaining = 0.0;
+  for (std::size_t i = 0; i < kept; ++i) {
+    remaining += s.probs[i];
+  }
+  for (std::size_t i = 0; i < kept; ++i) {
+    out[static_cast<std::size_t>(s.order[i])] = static_cast<float>(s.probs[i] / remaining);
+  }
+}
+
+std::int32_t Sampler::draw(std::span<const float> probabilities) {
+  Impl& s = *impl_;
+  const auto n = static_cast<std::size_t>(s.n_vocab);
+  AXON_CHECK(probabilities.size() == n, "Sampler: expected {} probabilities, found {}", n,
+             probabilities.size());
+  // The support, largest first, so the scan order matches sample()'s.
+  std::size_t support = 0;
+  double total = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (probabilities[i] > 0.0F) {
+      s.order[support++] = static_cast<std::int32_t>(i);
+      total += static_cast<double>(probabilities[i]);
+    }
+  }
+  AXON_CHECK(support > 0 && total > 0.0, "Sampler: a draw from an empty distribution");
+  std::sort(s.order.begin(), s.order.begin() + static_cast<std::ptrdiff_t>(support),
+            [&](std::int32_t a, std::int32_t b) {
+              return probabilities[static_cast<std::size_t>(a)] >
+                     probabilities[static_cast<std::size_t>(b)];
+            });
+  const double u = s.rng.uniform() * total;
+  double cumulative = 0.0;
+  for (std::size_t i = 0; i < support; ++i) {
+    cumulative += static_cast<double>(probabilities[static_cast<std::size_t>(s.order[i])]);
+    if (u < cumulative) {
+      return s.order[i];
+    }
+  }
+  return s.order[support - 1];
 }
 
 }  // namespace axon

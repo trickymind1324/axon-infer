@@ -34,6 +34,15 @@ public:
   // `recent` is the tail of the sequence, prompt included, for the repetition penalty. The
   // caller's logits are never modified.
   std::int32_t sample(std::span<const float> logits, std::span<const std::int32_t> recent);
+  // The distribution sample() would draw from: every stage applied (penalty, temperature,
+  // top-k, top-p, min-p), normalised over the vocabulary, zero outside the kept candidates.
+  // Temperature zero puts one at the argmax. Fills out[n_vocab] and allocates nothing.
+  void distribution(std::span<const float> logits, std::span<const std::int32_t> recent,
+                    std::span<float> out);
+  // One draw from a distribution the caller supplies (non-negative, any positive total), with
+  // this sampler's generator, scanning the support from the largest probability down, which
+  // is the order sample() scans its candidates in.
+  std::int32_t draw(std::span<const float> probabilities);
 
   void reset(std::uint64_t seed);
   [[nodiscard]] std::uint64_t seed() const noexcept;
@@ -41,6 +50,8 @@ public:
 
 private:
   struct Impl;
+  std::size_t prepare(std::span<const float> logits, std::span<const std::int32_t> recent,
+                      std::int32_t& greedy);
   std::unique_ptr<Impl> impl_;
 };
 
